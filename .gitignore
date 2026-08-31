@@ -1,0 +1,16 @@
+# dependencies
+node_modules/
+
+# scratch / build output
+.tmp/
+dist/
+.npm-cache/
+
+# machine-specific config
+.npmrc
+
+# logs / OS cruft
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

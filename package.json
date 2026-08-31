@@ -1,0 +1,17 @@
+{
+  "name": "krill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Krill — a cinematic third-person whale boids game",
+  "scripts": {
+    "dev": "node serve.js",
+    "serve": "node serve.js"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
