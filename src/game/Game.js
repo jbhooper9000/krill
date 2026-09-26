@@ -17,11 +17,18 @@ export class Game {
     this.canvas = canvas;
     this.ui = ui;
 
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    // Everything is rendered through Effects' composer into a 4x MSAA HDR
+    // target, so default-framebuffer MSAA would be wasted work.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // AgX: rolls saturated blues/cyans off toward white gracefully (ACES skews
+    // them and clips the Snell's window / sun glints harshly). Exposure is
+    // driven per-frame by Effects' depth-aware auto exposure.
+    this.renderer.toneMapping = THREE.AgXToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
+    // 1.5 cap: the water model is per-pixel; 2x DPR would ~double shading cost
+    // on high-DPI laptops for little visible gain in soft underwater images.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(58, 1, 0.1, 500);

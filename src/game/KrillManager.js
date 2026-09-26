@@ -27,6 +27,112 @@ function makeFishGeometry() {
   return merged;
 }
 
+// ---- materials ------------------------------------------------------------
+// Both are MeshStandardMaterial (so they get the water model: depth-attenuated
+// sun + caustics + absorption, see WaterMedium.js) with small shader tweaks
+// driven by the instance-local vertex position.
+
+// Krill: translucent shell with orange-red chromatophores, a darker gut and
+// black eyes at the head (+X is forward, along velocity). Sunlight passing
+// THROUGH the thin body (looking toward the sun) and a little wrapped light
+// give the glowing-translucent read; low-ish roughness gives the glints that
+// make a swarm shimmer as individuals turn.
+function makeKrillMaterial() {
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.38,
+    metalness: 0,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = 'varying vec3 vKLocal;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\n\tvKLocal = position;'
+    );
+    shader.fragmentShader = 'varying vec3 vKLocal;\n' + shader.fragmentShader
+      .replace(
+        '#include <color_fragment>',
+        /* glsl */ `#include <color_fragment>
+	float kEye;
+	float kGut;
+	{
+		float ax = vKLocal.x / 0.45;                 // -1 tail .. +1 head
+		float chroma = 0.5 + 0.5 * sin( ax * 21.0 + vKLocal.z * 70.0 );
+		vec3 shell = vec3( 0.82, 0.40, 0.24 );
+		vec3 pigment = vec3( 0.62, 0.11, 0.05 );
+		vec3 c = mix( shell, pigment, 0.35 + 0.45 * chroma * smoothstep( - 0.7, 0.5, ax ) );
+		kGut = 1.0 - smoothstep( 0.0, 0.35, abs( ax - 0.15 ) );
+		c = mix( c, vec3( 0.22, 0.2, 0.08 ), 0.45 * kGut );
+		kEye = smoothstep( 0.6, 0.78, ax ) * smoothstep( 0.02, 0.055, abs( vKLocal.z ) );
+		c = mix( c, vec3( 0.012 ), kEye );
+		diffuseColor.rgb = c;
+	}`
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        /* glsl */ `
+	#ifdef USE_FOG
+	{
+		vec3 kV = normalize( vViewPosition );
+		float kBack = pow( saturate( dot( - kV, kwSunV ) ), 3.0 );
+		float kWrap = saturate( dot( - normal, kwSunV ) * 0.5 + 0.5 );
+		outgoingLight += diffuseColor.rgb * kwSunT * ( kBack * 1.1 + kWrap * 0.22 );
+		outgoingLight += diffuseColor.rgb * kwAmbT * 0.06;
+		// see-through body: the water radiance behind the animal, tinted by
+		// the shell, replaces part of the reflected light (cheap stand-in for
+		// real transmission, no sorting or extra passes)
+		vec3 kDir = normalize( vKwWorld - cameraPosition );
+		vec3 kBg = kwWaterRadiance( kDir ) * kwLightAt( vKwWorld.y - KW_LEVEL ) * 1.15;
+		vec3 kTint = mix( vec3( 1.0 ), diffuseColor.rgb * 1.3, 0.6 );
+		float kTrans = 0.5 * ( 1.0 - kEye ) * ( 1.0 - 0.6 * kGut );
+		outgoingLight = mix( outgoingLight, kBg * kTint, kTrans );
+	}
+	#endif
+	#include <opaque_fragment>`
+      );
+  };
+  return mat;
+}
+
+// Fish: counter-shaded — dark blue-green, fairly matte back; mirror-like
+// silver flanks (high metalness reflecting the underwater environment: the
+// bright Snell's window above, dark water below) and a white belly.
+function makeFishMaterial() {
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.14,
+    metalness: 0.9,
+    envMapIntensity: 1.8,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = 'varying vec3 vFLocal;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\n\tvFLocal = position;'
+    );
+    shader.fragmentShader = 'varying vec3 vFLocal;\n' + shader.fragmentShader
+      .replace(
+        '#include <color_fragment>',
+        /* glsl */ `#include <color_fragment>
+	float fBack = smoothstep( 0.02, 0.16, vFLocal.y );
+	{
+		float belly = smoothstep( - 0.05, - 0.18, vFLocal.y );
+		vec3 flank = vec3( 0.92, 0.95, 0.97 );
+		vec3 c = mix( flank, vec3( 0.95 ), belly );
+		c = mix( c, vec3( 0.07, 0.16, 0.19 ), fBack );
+		diffuseColor.rgb = c;
+	}`
+      )
+      .replace(
+        '#include <metalnessmap_fragment>',
+        '#include <metalnessmap_fragment>\n\tmetalnessFactor = mix( metalnessFactor, 0.15, fBack );'
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        '#include <roughnessmap_fragment>\n\troughnessFactor = mix( roughnessFactor, 0.55, fBack );'
+      );
+  };
+  return mat;
+}
+
 const _dummy = new THREE.Object3D();
 const _mouth = new THREE.Vector3();
 const _xAxis = new THREE.Vector3();
@@ -47,20 +153,8 @@ export class KrillManager {
 
     this._krillGeo = makeKrillGeometry();
     this._fishGeo = makeFishGeometry();
-    this._krillMat = new THREE.MeshStandardMaterial({
-      color: 0xf6b8cc,
-      roughness: 0.5,
-      metalness: 0,
-      emissive: 0x4a1830,
-      emissiveIntensity: 0.5,
-    });
-    this._fishMat = new THREE.MeshStandardMaterial({
-      color: 0xb9ccd6,
-      roughness: 0.35,
-      metalness: 0.3,
-      emissive: 0x1a2a33,
-      emissiveIntensity: 0.25,
-    });
+    this._krillMat = makeKrillMaterial();
+    this._fishMat = makeFishMaterial();
   }
 
   _addKrillCloud(center) {
