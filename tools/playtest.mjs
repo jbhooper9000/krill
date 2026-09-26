@@ -274,12 +274,12 @@ const scenarios = {
   async blow() {
     await hideHud();
     await evaljs(`(() => { const c = krill.controller; c.position.set(0, c.bounds.maxY, 0); krill.phys.o2 = 0.3; return 1; })()`);
-    await pinCamera(1.3, 0.25, 1.0, 0.3);
+    await pinCamera(0.5, 0.15, 0.9, 0.35);
     for (let n = 0; n < 12; n++) {
       await sleep(300);
       const s = await evaljs(`({ o2: +krill.phys.o2.toFixed(2), atSurface: krill.controller.atSurface, spray: krill.splash.spray.alpha.reduce((a, v) => a + (v > 0), 0) })`);
       console.log('blow', JSON.stringify(s));
-      if (s.spray > 150 && n % 3 === 0) await shot(`blow-${n}`);
+      if (s.spray > 100) await shot(`blow-${n}`);
     }
   },
   async shots() {

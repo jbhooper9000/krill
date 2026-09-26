@@ -46,6 +46,8 @@ class ParticlePool {
     this.alpha = new Float32Array(count);
     this.grav = new Float32Array(count).fill(1); // per-particle gravity scale
     this.drag = new Float32Array(count); // per-particle air drag (1/s)
+    this.alphaScale = new Float32Array(count).fill(0.7);
+    this.grow = new Float32Array(count).fill(1.5); // size growth over life
     this._next = 0;
     this.active = 0;
 
@@ -78,10 +80,12 @@ class ParticlePool {
     scene.add(this.points);
   }
 
-  spawn(x, y, z, vx, vy, vz, life, size, grav = 1, drag = 0.4) {
+  spawn(x, y, z, vx, vy, vz, life, size, grav = 1, drag = 0.4, alpha = 0.7, grow = 1.5) {
     const i = this._next;
     this.grav[i] = grav;
     this.drag[i] = drag;
+    this.alphaScale[i] = alpha;
+    this.grow[i] = grow;
     this._next = (i + 1) % this.count;
     const i3 = i * 3;
     this.pos[i3] = x; this.pos[i3 + 1] = y; this.pos[i3 + 2] = z;
@@ -105,6 +109,8 @@ export class Splash {
     this.spray = new ParticlePool(scene, 6000, 0xf4fbff, { world });
     this.bubbles = new ParticlePool(scene, 4000, 0xdff6ff, { additive: true, world });
     this._shed = null; // { group, length, time, duration }
+    this._blows = []; // active exhalation jets
+    this.wind = { x: 0.8, z: 0.3 }; // m/s drift for mist (weather feed later)
 
     // foam slicks: a few pooled discs lying on the surface
     const foamTex = makeFoamTexture();
@@ -185,28 +191,43 @@ export class Splash {
   // species (design doc s4.1): humpback bushy ~3 m, blue a tall ~9 m column,
   // sperm angled forward-left from its offset blowhole.
   blow(pos, forward, size, shape) {
-    const y = Math.max(this.waterLevel + 0.2, pos.y + size * 0.1);
     const hl = Math.hypot(forward.x, forward.z) || 1;
     const fx = forward.x / hl, fz = forward.z / hl;
     const lx = fz, lz = -fx; // left of the heading
-    // blowhole sits ~35% of the body length ahead of centre
-    const bx = pos.x + fx * size * 0.35, bz = pos.z + fz * size * 0.35;
     const lean = shape.lean;
-    const dirX = (fx * 0.7 + lx * 0.7) * Math.sin(lean);
-    const dirZ = (fz * 0.7 + lz * 0.7) * Math.sin(lean);
-    const up = Math.cos(lean);
-    // mist rises against heavy drag, so launch fast enough to reach the height
+    this._blows.push({
+      // blowhole sits ~35% of the body length ahead of centre
+      x: pos.x + fx * size * 0.35,
+      y: Math.max(this.waterLevel + 0.2, pos.y + size * 0.1),
+      z: pos.z + fz * size * 0.35,
+      dx: (fx * 0.7 + lx * 0.7) * Math.sin(lean),
+      dz: (fz * 0.7 + lz * 0.7) * Math.sin(lean),
+      up: Math.cos(lean),
+      shape,
+      t: 0,
+      duration: 0.9, // an exhalation is a jet, not a pop
+    });
+  }
+
+  _emitBlow(b, dt) {
+    const { shape } = b;
+    // mist rises against heavy drag: launch fast enough to reach the height
     const v0 = Math.sqrt(2 * GRAVITY * 0.35 * shape.height) * 2.2;
-    const n = Math.round(220 + shape.height * 25);
-    for (let k = 0; k < n; k++) {
+    const k = 1 - b.t / b.duration; // jet weakens as the breath runs out
+    const n = Math.round((260 + shape.height * 30) * dt / b.duration * 1.6);
+    for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
-      const s = shape.spread * (0.3 + Math.random());
-      const v = v0 * (0.55 + Math.random() * 0.45);
+      const s = shape.spread * (0.2 + Math.random());
+      const v = v0 * (0.5 + 0.5 * k) * (0.6 + Math.random() * 0.4);
+      const mist = Math.random() < 0.45;
       this.spray.spawn(
-        bx + (Math.random() - 0.5) * 0.3, y, bz + (Math.random() - 0.5) * 0.3,
-        (dirX + Math.cos(a) * s) * v, up * v, (dirZ + Math.sin(a) * s) * v,
-        1.8 + Math.random() * 1.6, 0.25 + Math.random() * 0.5,
-        0.35, 1.3, // vapour: light, slowed quickly by air, lingers
+        b.x + (Math.random() - 0.5) * 0.25, b.y, b.z + (Math.random() - 0.5) * 0.25,
+        (b.dx + Math.cos(a) * s) * v + this.wind.x, b.up * v, (b.dz + Math.sin(a) * s) * v + this.wind.z,
+        mist ? 2.5 + Math.random() * 2 : 1.2 + Math.random(),
+        mist ? 0.7 + Math.random() * 0.9 : 0.12 + Math.random() * 0.2,
+        mist ? 0.12 : 0.6, mist ? 1.6 : 1.0,
+        mist ? 0.28 : 0.75, // vapour is faint; droplets bright
+        mist ? 2.2 : 0.8, // vapour spreads as it thins
       );
     }
   }
@@ -251,6 +272,13 @@ export class Splash {
       this.bubbles.points.visible = under;
     }
 
+    for (let i = this._blows.length - 1; i >= 0; i--) {
+      const b = this._blows[i];
+      this._emitBlow(b, dt);
+      b.t += dt;
+      if (b.t >= b.duration) this._blows.splice(i, 1);
+    }
+
     // shedding: drip from random points along the airborne body
     if (this._shed) {
       const s = this._shed;
@@ -285,9 +313,9 @@ export class Splash {
       sp.life[i] -= dt;
       if (sp.pos[i3 + 1] < wl && sp.vel[i3 + 1] < 0) sp.life[i] = 0;
       const t = sp.life[i] / sp.maxLife[i];
-      sp.alpha[i] = sp.life[i] > 0 ? Math.min(1, t * 3) * 0.7 : 0;
+      sp.alpha[i] = sp.life[i] > 0 ? Math.min(1, t * 3) * sp.alphaScale[i] : 0;
       // droplets break into mist as they age
-      sp.size[i] = sp.baseSize[i] * 0.6 * (1 + (1 - t) * 1.5);
+      sp.size[i] = sp.baseSize[i] * 0.6 * (1 + (1 - t) * sp.grow[i]);
     }
     sp.flush();
 
