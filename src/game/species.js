@@ -8,8 +8,8 @@ export const SPECIES = {
     emoji: '🐋',
     // Body proportions (all relative to body length L)
     length: 14, // world units
-    maxWidth: 0.30, // relative half-width at thickest point
-    maxHeight: 0.26, // relative half-height at thickest point
+    maxWidth: 0.135, // relative half-width at thickest point (real: ~0.25-0.3 L girth diameter)
+    maxHeight: 0.125, // relative half-height at thickest point
     flukeSpan: 0.32, // relative full span of tail fluke
     flipperLen: 0.42, // humpbacks have very long pectorals
     dorsalHeight: 0.06,
@@ -30,8 +30,8 @@ export const SPECIES = {
     name: 'Blue',
     emoji: '🐳',
     length: 22,
-    maxWidth: 0.20,
-    maxHeight: 0.18,
+    maxWidth: 0.085, // blues are very slender
+    maxHeight: 0.08,
     flukeSpan: 0.24,
     flipperLen: 0.16,
     dorsalHeight: 0.012,
@@ -49,8 +49,8 @@ export const SPECIES = {
     name: 'Sperm',
     emoji: '🐋',
     length: 16,
-    maxWidth: 0.24,
-    maxHeight: 0.30, // sperm whales are notably tall/bulky at the head
+    maxWidth: 0.11,
+    maxHeight: 0.13, // sperm whales are notably tall/bulky at the head
     flukeSpan: 0.26,
     flipperLen: 0.12,
     dorsalHeight: 0.05,

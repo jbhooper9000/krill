@@ -128,11 +128,11 @@ export class Game {
     const next = THREE.MathUtils.lerp(cur, this.targetScale, Math.min(1, dt * 3));
     this.whale.group.scale.setScalar(next);
 
-    // camera punch decay
-    if (this._punch > 0) {
-      this._punch = Math.max(0, this._punch - dt * 1.6);
-      const base = 58;
-      this.camera.fov = base + Math.sin(this._punch * Math.PI) * 6;
+    // camera FOV: speed widening + level-up punch
+    if (this._punch > 0) this._punch = Math.max(0, this._punch - dt * 1.6);
+    const fov = 58 + this.controller.fovOffset + Math.sin(this._punch * Math.PI) * 6;
+    if (Math.abs(fov - this.camera.fov) > 0.01) {
+      this.camera.fov = fov;
       this.camera.updateProjectionMatrix();
     }
 

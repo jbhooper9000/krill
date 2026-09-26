@@ -36,6 +36,7 @@ if (params.has('autostart')) {
   const species = ['humpback', 'blue', 'sperm'].includes(params.get('autostart'))
     ? params.get('autostart')
     : 'blue';
+  window.krill = game; // handle for automated testing
   requestAnimationFrame(() => {
     ui.selectSpecies(species);
     $('start-screen').classList.add('hidden');

@@ -28,13 +28,14 @@ function catmullRom(points, x) {
 }
 
 // Body outline profiles (fraction of max half-width/height along u: 0=nose, 1=tail)
+// Fusiform: tapered rostrum, thickest ~35% back, long tail stock to the flukes.
 const WIDTH_PROFILE = [
-  [0.0, 0.10], [0.06, 0.52], [0.16, 0.86], [0.30, 1.0], [0.46, 0.86],
-  [0.62, 0.64], [0.75, 0.42], [0.85, 0.22], [0.93, 0.12], [1.0, 0.03],
+  [0.0, 0.05], [0.04, 0.34], [0.12, 0.68], [0.24, 0.93], [0.36, 1.0], [0.5, 0.9],
+  [0.64, 0.68], [0.76, 0.42], [0.86, 0.2], [0.94, 0.09], [1.0, 0.035],
 ];
 const HEIGHT_PROFILE = [
-  [0.0, 0.09], [0.06, 0.48], [0.16, 0.80], [0.30, 0.94], [0.46, 0.80],
-  [0.62, 0.60], [0.75, 0.40], [0.85, 0.21], [0.93, 0.11], [1.0, 0.03],
+  [0.0, 0.04], [0.04, 0.26], [0.12, 0.58], [0.24, 0.88], [0.36, 1.0], [0.5, 0.94],
+  [0.64, 0.76], [0.76, 0.52], [0.86, 0.28], [0.94, 0.12], [1.0, 0.04],
 ];
 
 export class Whale {
@@ -48,7 +49,11 @@ export class Whale {
     this._model.rotation.y = Math.PI / 2;
     this.group.add(this._model);
     this._skinMat = this._makeSkinMaterial();
-    this._feedAmount = 0;
+    this._phase = 0; // accumulated tail-beat phase (never jumps when speed changes)
+    this._beatAmp = 0; // smoothed tail-beat amplitude
+    this._turnS = 0; // smoothed body bends
+    this._pitchS = 0;
+    this._engulf = 0; // rorqual throat-pouch inflation after a lunge
     this._build();
   }
 
@@ -74,8 +79,13 @@ export class Whale {
     this._body = this._buildBody();
     this._model.add(this._body);
 
+    // the fluke hangs off a pivot at the tail tip so it follows the spine wave
+    this._flukePivot = new THREE.Group();
+    this._flukePivot.position.set(-this.sp.length * 0.5, 0, 0);
+    this._flukePivot.rotation.order = 'YZX';
     this._fluke = this._buildFluke();
-    this._model.add(this._fluke);
+    this._flukePivot.add(this._fluke);
+    this._model.add(this._flukePivot);
 
     this._flipperL = this._buildFlipper(-1);
     this._flipperR = this._buildFlipper(1);
@@ -87,10 +97,17 @@ export class Whale {
     this._eyes = this._buildEyes();
     this._model.add(this._eyes);
 
-    if (this.sp.id === 'humpback') this._buildTubercles();
+    this._tubercles = this.sp.id === 'humpback' ? this._buildTubercles() : null;
 
-    this._feedCone = this._buildFeedCone();
-    this._model.add(this._feedCone);
+    // parts that ride on the spine: [object, u along body, base position, base rotation.z]
+    const L = this.sp.length;
+    this._riders = [
+      [this._flipperL, 0.34], [this._flipperR, 0.34], [this._dorsal, 0.63],
+      [this._eyes, 0.18],
+    ];
+    if (this._tubercles) this._riders.push([this._tubercles, 0.08]);
+    for (const r of this._riders) r.push(r[0].position.clone(), r[0].rotation.z);
+    this._mouthBase = new THREE.Vector3(L * 0.55, -L * 0.02, 0);
   }
 
   _buildBody() {
@@ -124,7 +141,6 @@ export class Whale {
     const positions = new Float32Array(vertexCount * 3);
     const normals = new Float32Array(vertexCount * 3);
     const uvs = new Float32Array(vertexCount * 2);
-    const tailWeight = new Float32Array(vertexCount);
 
     const EPS = 0.004;
     for (let i = 0; i <= Nu; i++) {
@@ -159,9 +175,6 @@ export class Whale {
 
         uvs[idx * 2] = u;
         uvs[idx * 2 + 1] = 0.5 + 0.5 * Math.sin(v * Math.PI * 2);
-
-        const tw = (u - 0.52) / (1 - 0.52);
-        tailWeight[idx] = tw < 0 ? 0 : tw * tw;
       }
     }
 
@@ -188,8 +201,15 @@ export class Whale {
 
     this._baseBody = new Float32Array(positions);
     this._baseNormals = new Float32Array(normals);
-    this._tailWeight = tailWeight;
     this._bodyGeo = geo;
+    this._Nu = Nu;
+    this._Nv = Nv;
+    // per-row spine state, filled each frame
+    this._rowDy = new Float32Array(Nu + 1);
+    this._rowDz = new Float32Array(Nu + 1);
+    this._rowSy = new Float32Array(Nu + 1);
+    this._rowSz = new Float32Array(Nu + 1);
+    this._rowPouch = new Float32Array(Nu + 1);
     return mesh;
   }
 
@@ -242,7 +262,7 @@ export class Whale {
     ];
     const geo = this._finFromShape(pts, thickness, bevel, 'horizontal');
     const mesh = new THREE.Mesh(geo, this._skinMat);
-    mesh.position.set(-L * 0.5 - C, 0, 0); // leading edge sits at the tail tip
+    mesh.position.set(-C, 0, 0); // leading edge sits at the pivot (tail tip)
     mesh.name = 'fluke';
     return mesh;
   }
@@ -327,93 +347,121 @@ export class Whale {
     }
     g.name = 'tubercles';
     this._model.add(g);
-  }
-
-  _buildFeedCone() {
-    const L = this.sp.length;
-    const r = this.sp.mouthRadius * L * 0.28;
-    const geo = new THREE.ConeGeometry(r, L * 0.5, 24, 1, true);
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0x9fe8ff,
-      transparent: true,
-      opacity: 0,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const cone = new THREE.Mesh(geo, mat);
-    cone.rotation.z = -Math.PI / 2; // apex points +X (out the nose, forward)
-    cone.position.set(L * 0.62, -L * 0.02, 0);
-    cone.name = 'feedCone';
-    return cone;
+    return g;
   }
 
   // ---- animation ---------------------------------------------------------
 
-  // state: { speed, turn, pitch, feeding, lunge, time }
+  // state: { speed, thrust, turn, pitchRate, feeding, lunge }
   update(dt, state) {
     const L = this.sp.length;
-    const t = state.time;
+    const k = (r) => 1 - Math.exp(-r * dt);
 
-    const speedFactor = THREE.MathUtils.clamp(state.speed / 0.8, 0.2, 1.5);
-    const beatFreq = 1.4 * speedFactor;
-    const amp = 0.22 * speedFactor + state.lunge * 0.18;
+    // ---- tail beat: phase accumulates, so frequency changes never jump ----
+    const thrust = state.thrust;
+    const beatFreq = 0.22 + 0.42 * Math.min(thrust, 1.2) + 0.25 * Math.max(0, thrust - 1); // Hz
+    this._phase = (this._phase + dt * beatFreq * Math.PI * 2) % (Math.PI * 200);
+    // a slow idle undulation keeps a gliding whale alive
+    const targetAmp = 0.012 + 0.06 * Math.min(thrust, 1) + 0.035 * Math.max(0, thrust - 1);
+    this._beatAmp += (targetAmp - this._beatAmp) * k(2.5);
+    this._turnS += (state.turn - this._turnS) * k(4);
+    this._pitchS += (state.pitchRate - this._pitchS) * k(4);
 
+    // rorquals balloon the throat pouch while engulfing, then slowly deflate
+    const rorqual = this.sp.id !== 'sperm';
+    const engulfTarget = rorqual && state.lunge > 0 ? 0.5 + state.lunge * 0.5 : 0;
+    this._engulf += (engulfTarget - this._engulf) * k(engulfTarget > this._engulf ? 5 : 0.8);
+
+    // ---- per-row spine displacement + slope ----
+    const Nu = this._Nu, Nv = this._Nv;
+    const dyA = this._rowDy, dzA = this._rowDz, syA = this._rowSy, szA = this._rowSz, pouch = this._rowPouch;
+    const amp = this._beatAmp * L;
+    const WAVE_K = 2.6; // radians of wave along the body (wavelength > body length)
+    for (let i = 0; i <= Nu; i++) {
+      const u = i / Nu;
+      // amplitude envelope: small at the head, a node near the flippers, max at the fluke
+      const env = (0.02 - 0.08 * u + 0.16 * u * u) / 0.1;
+      const bend = Math.max(0, u - 0.25);
+      const bendShape = (bend * bend) / 0.5625;
+      // body follows its own path: tail swings toward the turn/pitch direction
+      dyA[i] = amp * env * Math.sin(this._phase - WAVE_K * u) + this._pitchS * 0.05 * L * bendShape;
+      dzA[i] = -this._turnS * 0.07 * L * bendShape;
+      const p = (u - 0.08) / 0.45;
+      pouch[i] = p > 0 && p < 1 ? Math.sin(p * Math.PI) * this._engulf : 0;
+    }
+    const dx = -L / Nu; // x decreases as u increases
+    for (let i = 0; i <= Nu; i++) {
+      const a = Math.max(0, i - 1), b = Math.min(Nu, i + 1);
+      syA[i] = (dyA[b] - dyA[a]) / ((b - a) * dx);
+      szA[i] = (dzA[b] - dzA[a]) / ((b - a) * dx);
+    }
+
+    // ---- deform the body: rotate each cross-section to the spine tangent ----
     const pos = this._bodyGeo.attributes.position.array;
     const nrm = this._bodyGeo.attributes.normal.array;
     const base = this._baseBody;
     const baseN = this._baseNormals;
-    const tw = this._tailWeight;
-    const pivotX = -L * 0.02;
+    for (let i = 0; i <= Nu; i++) {
+      const th = Math.atan(syA[i]), ps = Math.atan(szA[i]);
+      const ct = Math.cos(th), st = Math.sin(th), cp = Math.cos(ps), sp = Math.sin(ps);
+      const dy = dyA[i], dz = dzA[i], pch = pouch[i];
+      for (let j = 0; j < Nv; j++) {
+        const v = (i * Nv + j) * 3;
+        const bx = base[v];
+        let by = base[v + 1];
+        let bz = base[v + 2];
+        if (pch > 0 && by < 0) {
+          // inflate the lower half of the cross-section downward and outward
+          const lower = -by / (Math.abs(by) + Math.abs(bz) + 1e-5);
+          by *= 1 + pch * 0.55 * lower;
+          bz *= 1 + pch * 0.18 * lower;
+        }
+        // Z-rotation (vertical bend), then Y-rotation (lateral bend)
+        const o1x = -by * st, o1y = by * ct;
+        pos[v] = bx + o1x * cp - bz * sp;
+        pos[v + 1] = dy + o1y;
+        pos[v + 2] = dz + o1x * sp + bz * cp;
 
-    for (let i = 0; i < base.length; i += 3) {
-      const wgt = tw[i / 3];
-      if (wgt <= 0) {
-        // static vertices: keep base position/normal
-        pos[i] = base[i];
-        pos[i + 1] = base[i + 1];
-        pos[i + 2] = base[i + 2];
-        continue;
+        const nx = baseN[v], ny = baseN[v + 1], nz = baseN[v + 2];
+        const n1x = nx * ct - ny * st, n1y = nx * st + ny * ct;
+        nrm[v] = n1x * cp - nz * sp;
+        nrm[v + 1] = n1y;
+        nrm[v + 2] = n1x * sp + nz * cp;
       }
-      const bx = base[i], by = base[i + 1];
-      const phase = t * beatFreq * Math.PI * 2 - wgt * 2.4;
-      let angle = amp * wgt * Math.sin(phase);
-      angle -= state.turn * 0.16 * wgt;
-
-      const dx = bx - pivotX, dy = by;
-      const ca = Math.cos(angle), sa = Math.sin(angle);
-      pos[i] = pivotX + dx * ca - dy * sa;
-      pos[i + 1] = dx * sa + dy * ca;
-      pos[i + 2] = base[i + 2];
-
-      // rotate the normal by the same angle about Z
-      const nxx = baseN[i], nyy = baseN[i + 1];
-      nrm[i] = nxx * ca - nyy * sa;
-      nrm[i + 1] = nxx * sa + nyy * ca;
-      nrm[i + 2] = baseN[i + 2];
     }
     this._bodyGeo.attributes.position.needsUpdate = true;
     this._bodyGeo.attributes.normal.needsUpdate = true;
+    this._bodyGeo.computeBoundingSphere();
 
-    const flukeAngle = amp * 1.15 * Math.sin(t * beatFreq * Math.PI * 2) - state.turn * 0.2;
-    this._fluke.rotation.z = flukeAngle;
+    // ---- fluke rides the tail tip, pitched a little past the spine tangent ----
+    const tip = Nu;
+    this._flukePivot.position.set(-L * 0.5, dyA[tip], dzA[tip]);
+    const flukeLag = this._beatAmp * 4.0 * Math.cos(this._phase - WAVE_K);
+    this._flukePivot.rotation.z = Math.atan(syA[tip]) * 1.25 - flukeLag * 0.35;
+    this._flukePivot.rotation.y = -Math.atan(szA[tip]);
 
-    const fp = Math.sin(t * beatFreq * Math.PI * 2 + 1.2) * 0.12 * speedFactor + state.pitch * 0.4;
-    this._flipperL.rotation.x = fp;
-    this._flipperR.rotation.x = fp;
+    // ---- attached parts follow the spine ----
+    for (const [obj, u, p0, rz0] of this._riders) {
+      const i = Math.round(u * Nu);
+      obj.position.set(p0.x, p0.y + dyA[i], p0.z + dzA[i]);
+      obj.rotation.z = rz0 + Math.atan(syA[i]);
+    }
 
-    this._feedAmount += ((state.feeding > 0 ? 1 : 0) - this._feedAmount) * Math.min(1, dt * 8);
-    const cone = this._feedCone;
-    const targetScale = 0.6 + state.lunge * 1.2 + state.feeding * 0.4;
-    cone.scale.setScalar(THREE.MathUtils.lerp(cone.scale.x, targetScale, Math.min(1, dt * 6)));
-    cone.material.opacity = this._feedAmount * (0.10 + state.lunge * 0.30);
-    cone.visible = cone.material.opacity > 0.01;
+    // pectorals: gentle stroke, trim with pitch, dip the inside fin in turns
+    const stroke = Math.sin(this._phase + 1.2) * 0.06 * Math.min(1, thrust + 0.3);
+    const trim = -this._pitchS * 0.25;
+    this._flipperL.rotation.x = stroke + trim + this._turnS * 0.25;
+    this._flipperR.rotation.x = stroke + trim + this._turnS * 0.25;
   }
 
-  get mouthPosition() {
-    const L = this.sp.length;
-    return new THREE.Vector3(L * 0.55, -L * 0.02, 0);
+  // Mouth position in whale-group space (includes the model's +X→-Z turn).
+  getMouthPosition(out) {
+    out.copy(this._mouthBase);
+    out.y += this._rowDy[0];
+    return out.applyAxisAngle(_Y, Math.PI / 2);
   }
 }
+
+const _Y = new THREE.Vector3(0, 1, 0);
 
 export const WHALE_SPECIES = SPECIES;

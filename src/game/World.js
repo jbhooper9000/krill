@@ -287,6 +287,7 @@ export class World {
       sizeAttenuation: true,
     });
     this.snow = new THREE.Points(geo, mat);
+    this.snow.frustumCulled = false; // particles wrap around the camera
     this.scene.add(this.snow);
   }
 
@@ -345,13 +346,21 @@ export class World {
     }
 
     // marine snow drift
+    // particles wrap around the camera so the water is never empty
     const pos = this._snowPos;
+    const cx = camera ? camera.position.x : 0;
+    const cz = camera ? camera.position.z : 0;
+    const half = 75, span = 150;
     for (let i = 0; i < this._snowCount; i++) {
       const i3 = i * 3;
       pos[i3 + 1] -= this._snowVel[i] * dt;
       pos[i3] += Math.sin(t * 0.5 + i) * 0.004;
       pos[i3 + 2] += Math.cos(t * 0.4 + i) * 0.004;
       if (pos[i3 + 1] < this.floorY + 1) pos[i3 + 1] = this.waterLevel - 0.5;
+      if (pos[i3] - cx > half) pos[i3] -= span;
+      else if (pos[i3] - cx < -half) pos[i3] += span;
+      if (pos[i3 + 2] - cz > half) pos[i3 + 2] -= span;
+      else if (pos[i3 + 2] - cz < -half) pos[i3 + 2] += span;
     }
     this.snow.geometry.attributes.position.needsUpdate = true;
 

@@ -2,8 +2,6 @@
 // Positions/velocities live in flat Float32Arrays so a caller can push them
 // straight into InstancedMesh matrices.
 
-const TMP = new Float32Array(3);
-
 export class BoidSystem {
   constructor(count, params = {}) {
     this.count = count;
@@ -34,8 +32,15 @@ export class BoidSystem {
     // externals: { type: 'flee'|'attract', position: [x,y,z], radius, strength }
     this.externals = [];
 
-    this._grid = new Map();
+    // spatial hash: counting-sort into typed arrays (no per-frame allocation)
     this._cell = this.params.neighborRadius || 6;
+    let size = 64;
+    while (size < count * 2) size <<= 1;
+    this._hashMask = size - 1;
+    this._cellStart = new Int32Array(size + 1);
+    this._cellKey = new Float64Array(count); // exact cell id, to reject hash collisions
+    this._cellHash = new Int32Array(count);
+    this._sorted = new Int32Array(count);
   }
 
   seed(center, spread = 18) {
@@ -55,91 +60,91 @@ export class BoidSystem {
   }
 
   _key(ix, iy, iz) {
-    // pack into a single integer (world is small and bounded)
+    // exact cell id (world is small and bounded)
     return (ix + 512) + (iy + 512) * 1024 + (iz + 512) * 1048576;
   }
 
+  _hash(ix, iy, iz) {
+    return (Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663) ^ Math.imul(iz, 83492791)) & this._hashMask;
+  }
+
   _buildGrid() {
-    const { pos, count } = this;
+    const { pos, count, alive, _cellStart: start, _cellKey: keys, _cellHash: hashes, _sorted: sorted } = this;
     const cell = this._cell;
-    this._grid.clear();
+    start.fill(0);
     for (let i = 0; i < count; i++) {
-      if (!this.alive[i]) continue;
+      if (!alive[i]) { hashes[i] = -1; continue; }
       const i3 = i * 3;
       const ix = Math.floor(pos[i3] / cell);
       const iy = Math.floor(pos[i3 + 1] / cell);
       const iz = Math.floor(pos[i3 + 2] / cell);
-      const k = this._key(ix, iy, iz);
-      let arr = this._grid.get(k);
-      if (!arr) {
-        arr = [];
-        this._grid.set(k, arr);
-      }
-      arr.push(i);
+      const h = this._hash(ix, iy, iz);
+      hashes[i] = h;
+      keys[i] = this._key(ix, iy, iz);
+      start[h + 1]++;
     }
-  }
-
-  _neighbors(i, out) {
-    const { pos } = this;
-    const cell = this._cell;
-    const i3 = i * 3;
-    const ix = Math.floor(pos[i3] / cell);
-    const iy = Math.floor(pos[i3 + 1] / cell);
-    const iz = Math.floor(pos[i3 + 2] / cell);
-    out.length = 0;
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dz = -1; dz <= 1; dz++) {
-          const arr = this._grid.get(this._key(ix + dx, iy + dy, iz + dz));
-          if (!arr) continue;
-          for (let n = 0; n < arr.length; n++) {
-            const j = arr[n];
-            if (j !== i) out.push(j);
-          }
-        }
-      }
+    for (let h = 1; h < start.length; h++) start[h] += start[h - 1];
+    // fill buckets (start[h] is advanced then restored below)
+    for (let i = 0; i < count; i++) {
+      const h = hashes[i];
+      if (h >= 0) sorted[start[h]++] = i;
     }
+    for (let h = start.length - 1; h > 0; h--) start[h] = start[h - 1];
+    start[0] = 0;
   }
 
   update(dt, time) {
     const { pos, vel, phase, alive, count, params: p } = this;
     const maxSpeed2 = p.maxSpeed * p.maxSpeed;
-    const neigh = [];
+    const cell = this._cell;
+    const { _cellStart: start, _cellKey: keys, _sorted: sorted } = this;
     this._buildGrid();
 
     for (let i = 0; i < count; i++) {
       if (!alive[i]) continue;
       const i3 = i * 3;
-      this._neighbors(i, neigh);
+      const cx0 = Math.floor(pos[i3] / cell);
+      const cy0 = Math.floor(pos[i3 + 1] / cell);
+      const cz0 = Math.floor(pos[i3 + 2] / cell);
 
       let sx = 0, sy = 0, sz = 0; // separation
       let ax = 0, ay = 0, az = 0; // alignment
       let cx = 0, cy = 0, cz = 0; // cohesion
       let nCount = 0;
+      const sepR2 = p.separationRadius * p.separationRadius;
 
-      for (let n = 0; n < neigh.length; n++) {
-        const j = neigh[n];
-        if (!alive[j]) continue;
-        const j3 = j * 3;
-        const dx = pos[i3] - pos[j3];
-        const dy = pos[i3 + 1] - pos[j3 + 1];
-        const dz = pos[i3 + 2] - pos[j3 + 2];
-        const d2 = dx * dx + dy * dy + dz * dz;
+      for (let ox = -1; ox <= 1; ox++) {
+        for (let oy = -1; oy <= 1; oy++) {
+          for (let oz = -1; oz <= 1; oz++) {
+            const nx = cx0 + ox, ny = cy0 + oy, nz = cz0 + oz;
+            const h = this._hash(nx, ny, nz);
+            const key = this._key(nx, ny, nz);
+            for (let s = start[h], e = start[h + 1]; s < e; s++) {
+              const j = sorted[s];
+              if (j === i || keys[j] !== key) continue;
+              const j3 = j * 3;
+              const dx = pos[i3] - pos[j3];
+              const dy = pos[i3 + 1] - pos[j3 + 1];
+              const dz = pos[i3 + 2] - pos[j3 + 2];
+              const d2 = dx * dx + dy * dy + dz * dz;
 
-        ax += vel[j3];
-        ay += vel[j3 + 1];
-        az += vel[j3 + 2];
-        cx += pos[j3];
-        cy += pos[j3 + 1];
-        cz += pos[j3 + 2];
-        nCount++;
+              ax += vel[j3];
+              ay += vel[j3 + 1];
+              az += vel[j3 + 2];
+              cx += pos[j3];
+              cy += pos[j3 + 1];
+              cz += pos[j3 + 2];
+              nCount++;
 
-        if (d2 > 1e-6 && d2 < p.separationRadius * p.separationRadius) {
-          const d = Math.sqrt(d2);
-          const w = (1 - d / p.separationRadius) / d;
-          sx += dx * w;
-          sy += dy * w;
-          sz += dz * w;
+              if (d2 > 1e-6 && d2 < sepR2) {
+                const d = Math.sqrt(d2);
+                const w = (1 - d / p.separationRadius) / d;
+                sx += dx * w;
+                sy += dy * w;
+                sz += dz * w;
+              }
+            }
+          }
         }
       }
 

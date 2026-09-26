@@ -1,0 +1,181 @@
+// Headless playtest harness: serves the game, drives it in headless Chrome via
+// the DevTools protocol, samples state and saves screenshots.
+//
+//   node tools/playtest.mjs [species] [scenario] [--out dir] [--port n]
+//
+// scenarios: play (swim/turn/lunge/glide), side (side-on camera sequence),
+//            feed (swim through a krill cloud), shots (static views: behind,
+//            side, above-surface, looking up, deep)
+// Headless Chrome renders with SwiftShader (software), so expect ~5-10 fps —
+// game time (dt clamped to 0.05) runs slower than wall time.
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const args = process.argv.slice(2);
+const opt = (name, def) => {
+  const i = args.indexOf(`--${name}`);
+  return i >= 0 ? args.splice(i, 2)[1] : def;
+};
+const out = path.resolve(opt('out', path.join(root, '.playtest')));
+const port = Number(opt('port', 5300 + Math.floor(Math.random() * 500)));
+const [species = 'humpback', scenario = 'play'] = args;
+fs.mkdirSync(out, { recursive: true });
+
+const chromePaths = [
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  '/usr/bin/google-chrome',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+];
+const chrome = chromePaths.find((p) => fs.existsSync(p));
+const cdpPort = port + 1000;
+
+const server = spawn(process.execPath, [path.join(root, 'serve.js')], {
+  env: { ...process.env, PORT: String(port) },
+  stdio: 'ignore',
+});
+const browser = spawn(chrome, [
+  '--headless=new', `--remote-debugging-port=${cdpPort}`, '--window-size=1280,720',
+  '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
+  `--user-data-dir=${path.join(out, '.chrome-profile')}`, 'about:blank',
+], { stdio: 'ignore' });
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let ws, id = 0;
+const pending = new Map();
+const logs = [];
+function send(method, params = {}) {
+  return new Promise((res, rej) => {
+    const i = ++id;
+    pending.set(i, { res, rej });
+    ws.send(JSON.stringify({ id: i, method, params }));
+  });
+}
+async function evaljs(expr) {
+  const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
+  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
+  return r.result.value;
+}
+async function shot(name) {
+  const r = await send('Page.captureScreenshot', { format: 'png' });
+  const file = path.join(out, `${species}-${name}.png`);
+  fs.writeFileSync(file, Buffer.from(r.data, 'base64'));
+  console.log('screenshot', file);
+}
+const key = (type, code, k) =>
+  send('Input.dispatchKeyEvent', { type, code, key: k, windowsVirtualKeyCode: k.length === 1 ? k.toUpperCase().charCodeAt(0) : 0 });
+const mouse = (type, x, y, button = 'left') =>
+  send('Input.dispatchMouseEvent', { type, x, y, button, clickCount: type === 'mouseMoved' ? 0 : 1 });
+const drag = async (dx, dy, steps = 20) => {
+  await mouse('mousePressed', 640, 360);
+  for (let i = 1; i <= steps; i++) { await mouse('mouseMoved', 640 + (dx * i) / steps, 360 + (dy * i) / steps); await sleep(30); }
+  await mouse('mouseReleased', 640 + dx, 360 + dy);
+};
+const sample = () => evaljs(`(() => { const c = krill.controller; const w = krill.whale;
+  return { pos: c.position.toArray().map(v=>+v.toFixed(2)), speed: +c.speed.toFixed(2), yaw: +c.yaw.toFixed(3),
+    pitch: +c.pitch.toFixed(3), roll: +c.roll.toFixed(3), thrust: +c.thrust.toFixed(2), eaten: krill.krill.totalEaten,
+    err: document.getElementById('error-screen').classList.contains('hidden') ? null : document.getElementById('error-message').textContent }; })()`);
+const fps = () => evaljs(`new Promise(r => { let n=0; const t0=performance.now(); function f(){ n++; if (performance.now()-t0<2000) requestAnimationFrame(f); else r(+(n/((performance.now()-t0)/1000)).toFixed(1)); } requestAnimationFrame(f); })`);
+// Pin the camera relative to the whale: offsets are in whale lengths.
+const pinCamera = (ox, oy, oz, lookUp = 0) => evaljs(`krill.controller._updateCamera = function(){ const p=this.position; const L=this.sp.length;
+  this.camera.position.set(p.x + L*${ox}, p.y + L*${oy}, p.z + L*${oz}); this.camera.lookAt(p.x, p.y + L*${lookUp}, p.z); }; 1`);
+const hideHud = () => evaljs(`document.getElementById('hud').style.display='none'; 1`);
+
+const scenarios = {
+  async play() {
+    console.log('t0', JSON.stringify(await sample()));
+    await shot('play-0-idle');
+    await key('keyDown', 'KeyW', 'w');
+    await sleep(3000);
+    console.log('swim', JSON.stringify(await sample()));
+    await shot('play-1-swim');
+    await drag(-240, 0);
+    console.log('turn', JSON.stringify(await sample()));
+    await shot('play-2-turn');
+    await sleep(2000);
+    await mouse('mousePressed', 640, 360, 'right'); await sleep(1000); await mouse('mouseReleased', 640, 360, 'right');
+    await sleep(400);
+    console.log('lunge', JSON.stringify(await sample()));
+    await shot('play-3-lunge');
+    await key('keyUp', 'KeyW', 'w');
+    await sleep(2000);
+    console.log('glide', JSON.stringify(await sample()));
+    await shot('play-4-glide');
+  },
+  async side() {
+    await hideHud();
+    await pinCamera(1.6, 0.15, 0.1);
+    await key('keyDown', 'KeyW', 'w');
+    await sleep(2500);
+    for (let n = 0; n < 4; n++) { await shot(`side-${n}`); await sleep(350); }
+    await drag(-280, 0);
+    await shot('side-turn');
+    await mouse('mousePressed', 640, 360, 'right'); await sleep(1000); await mouse('mouseReleased', 640, 360, 'right');
+    await sleep(600);
+    await shot('side-lunge');
+  },
+  async feed() {
+    await evaljs(`(() => { const c = krill.controller; const h = krill.krill.krillClouds[0].homeCenter;
+      c.position.set(h.x, h.y, h.z + 12); c.velocity.set(0,0,0); c.speed = 0; return 1; })()`);
+    await key('keyDown', 'KeyW', 'w');
+    for (let n = 0; n < 6; n++) { await sleep(1500); console.log('feed', JSON.stringify(await sample())); }
+    await shot('feed');
+  },
+  async shots() {
+    await hideHud();
+    await key('keyDown', 'KeyW', 'w');
+    await sleep(1500);
+    await key('keyUp', 'KeyW', 'w');
+    await shot('shots-behind');
+    await pinCamera(1.4, 0.1, 0.4); await sleep(600); await shot('shots-side');
+    await pinCamera(0.8, -0.6, 0.8, 3); await sleep(600); await shot('shots-looking-up');
+    await evaljs(`krill.controller.position.y = -2; 1`);
+    await pinCamera(1.2, 0.6, 1.2); await sleep(600); await shot('shots-near-surface');
+    await evaljs(`krill.controller.position.y = krill.controller.bounds.minY + 4; 1`);
+    await pinCamera(1.4, 0.2, 0.6); await sleep(900); await shot('shots-deep');
+  },
+};
+
+try {
+  if (!chrome) throw new Error('No Chrome/Edge found');
+  let target;
+  for (let t = 0; t < 50 && !target; t++) {
+    await sleep(200);
+    try {
+      const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json();
+      target = list.find((x) => x.type === 'page');
+    } catch {}
+  }
+  ws = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((r) => (ws.onopen = r));
+  ws.onmessage = (m) => {
+    const msg = JSON.parse(m.data);
+    if (msg.id && pending.has(msg.id)) {
+      const p = pending.get(msg.id); pending.delete(msg.id);
+      msg.error ? p.rej(new Error(msg.error.message)) : p.res(msg.result);
+    } else if (msg.method === 'Runtime.consoleAPICalled') {
+      logs.push(msg.params.type + ': ' + msg.params.args.map((a) => a.value ?? a.description).join(' '));
+    } else if (msg.method === 'Runtime.exceptionThrown') {
+      logs.push('EXCEPTION: ' + (msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text));
+    }
+  };
+  await send('Runtime.enable');
+  await send('Page.enable');
+  await send('Page.navigate', { url: `http://localhost:${port}/?autostart=${species}` });
+  await sleep(4000);
+  if (!scenarios[scenario]) throw new Error(`unknown scenario ${scenario}`);
+  await scenarios[scenario]();
+  console.log('fps (software render)', await fps());
+  console.log('final', JSON.stringify(await sample()));
+} catch (e) {
+  console.error('PLAYTEST ERROR', e.message);
+  process.exitCode = 1;
+} finally {
+  console.log('--- page logs ---\n' + logs.join('\n'));
+  ws?.close();
+  browser.kill();
+  server.kill();
+}
