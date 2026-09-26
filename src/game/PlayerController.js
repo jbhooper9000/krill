@@ -9,6 +9,8 @@ const _desiredCam = new THREE.Vector3();
 const _desiredLook = new THREE.Vector3();
 const _mouthLocal = new THREE.Vector3();
 
+const G = 9.81;
+const _right = new THREE.Vector3();
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 // frame-rate independent exponential smoothing factor
 const damp = (rate, dt) => 1 - Math.exp(-rate * dt);
@@ -49,6 +51,27 @@ export class PlayerController {
 
     this.fovOffset = 0;
 
+    // breaching (see docs/design/GAME_DESIGN.md section 5): hold F from depth
+    // to run up, launch at the surface, fly ballistically, twist, crash back.
+    // mode: 'swim' | 'air'. Game sets breachReady and listens via onEvent.
+    this.mode = 'swim';
+    this.breachReady = false;
+    this.onEvent = null; // (type, data): runup | breach-denied | breach-abort | breach | splash
+    this._runup = false;
+    this._breachHeld = false;
+    this._twistBias = 0; // mouse-X steering of the twist during run-up
+    this._twist = 0; // roll rate while airborne
+    this._twistLeft = 0; // roll still to apply while airborne
+    this._submerge = 0; // seconds of reduced control after re-entry
+    this._cooldown = 0;
+    this._launchInfo = { clearance: 0, q: 0, twist: 0 };
+    this.timeScale = 1; // apex slow-motion, applied by Game to the whole sim
+    this.shake = 0;
+    this._witness = 0; // blend toward the side-on "witness" camera while airborne
+    this._witnessPos = new THREE.Vector3();
+    this._camCeil = -0.6; // highest the camera may go (rises above water during a breach)
+    this._camDistMul = 1;
+
     this._camPos = new THREE.Vector3();
     this._camLook = new THREE.Vector3();
     this._camTarget = new THREE.Vector3().copy(this.position);
@@ -86,12 +109,17 @@ export class PlayerController {
   // Orbit camera around a softly-sprung follow point on the whale.
   _updateCamera(dt, snap = false) {
     const L = this.sp.length * this.scale;
-    const dist = L * TUNING.cameraDist * this.zoom;
     const height = L * 0.12;
 
     // the follow point lags the whale a little, so speed reads on screen
     if (snap) this._camTarget.copy(this.position);
     else this._camTarget.lerp(this.position, damp(9, dt));
+
+    // pull back and allow the camera above the waterline during a breach
+    const air = this.mode === 'air';
+    this._camDistMul += ((air ? 1.35 : 1) - this._camDistMul) * damp(air ? 2 : 0.8, dt);
+    this._camCeil += ((air ? L * 0.6 : -0.6) - this._camCeil) * damp(air ? 3 : 1.2, dt);
+    const dist = L * TUNING.cameraDist * this.zoom * this._camDistMul;
 
     const fwd = this.forwardVector();
     _desiredCam.copy(this._camTarget).addScaledVector(fwd, -dist);
@@ -99,8 +127,15 @@ export class PlayerController {
     _desiredLook.copy(this._camTarget).addScaledVector(fwd, dist * 0.6);
     _desiredLook.y += height * 0.5;
 
+    // airborne: glide to a side-on witness shot just above the water
+    this._witness += ((air ? 1 : 0) - this._witness) * damp(air ? 2.5 : 1.0, dt);
+    if (this._witness > 0.001) {
+      _desiredCam.lerp(this._witnessPos, this._witness);
+      _desiredLook.lerp(this.position, this._witness);
+    }
+
     // don't let the camera poke through the surface or floor
-    _desiredCam.y = THREE.MathUtils.clamp(_desiredCam.y, this.bounds.minY - L * 0.3, -0.6);
+    _desiredCam.y = THREE.MathUtils.clamp(_desiredCam.y, this.bounds.minY - L * 0.3, this._camCeil);
 
     if (snap) {
       this._camPos.copy(_desiredCam);
@@ -110,10 +145,17 @@ export class PlayerController {
       this._camLook.lerp(_desiredLook, damp(18, dt));
     }
     this.camera.position.copy(this._camPos);
+    if (this.shake > 0.001) {
+      const a = this.shake * this.shake * L * 0.025;
+      this.camera.position.x += (Math.random() - 0.5) * a;
+      this.camera.position.y += (Math.random() - 0.5) * a;
+      this.camera.position.z += (Math.random() - 0.5) * a;
+      this.shake *= Math.exp(-dt * 3);
+    }
     this.camera.lookAt(this._camLook);
   }
 
-  // input: { lookX, lookY, forward, ascend, descend, lunge, zoom }
+  // input: { lookX, lookY, forward, ascend, descend, lunge, breach, zoom }
   update(dt, input) {
     const sp = this.sp;
     const cruise = TUNING.swimSpeed * sp.speed;
@@ -145,11 +187,49 @@ export class PlayerController {
       lungeActive = true;
     }
 
+    if (this.mode === 'air') {
+      this._updateAir(dt, input, cruise);
+      return;
+    }
+
+    this.timeScale += (1 - this.timeScale) * damp(6, dt);
+    const L = sp.length * this.scale;
+    const depth = -this.position.y;
+    if (this._cooldown > 0) this._cooldown -= dt;
+    if (this._submerge > 0) this._submerge = Math.max(0, this._submerge - dt);
+    const control = 0.4 + 0.6 * (1 - this._submerge / 1.8);
+
+    // ---- breach run-up: F pressed inside the breach window ----
+    if (input.breach && !this._breachHeld && !this._runup) {
+      let reason = null;
+      if (!this.breachReady) reason = 'Surge not ready';
+      else if (this._cooldown > 0) reason = 'Catching your breath';
+      else if (depth < 0.8 * L) reason = 'Too shallow — dive deeper first';
+      else if (depth > 4 * L) reason = 'Too deep — rise closer to the surface';
+      if (reason) this._emit('breach-denied', { reason });
+      else {
+        this._runup = true;
+        this._twistBias = 0;
+        this._emit('runup', {});
+      }
+    }
+    this._breachHeld = input.breach;
+    if (this._runup && !input.breach && depth > 0.8 * L) {
+      this._runup = false;
+      this._emit('breach-abort', {});
+    }
+    if (this._runup) {
+      this._twistBias = THREE.MathUtils.clamp(this._twistBias * Math.exp(-dt * 0.5) - input.lookX * 0.01, -1, 1);
+    }
+
     // ---- thrust / forward speed (momentum; the whale glides when idle) ----
     let targetSpeed = 0;
     let targetThrust = 0;
     if (input.forward) { targetSpeed = cruise; targetThrust = 1; }
-    if (lungeActive) {
+    if (this._runup) {
+      targetSpeed = Math.max(cruise * 1.3, sp.vExitMax * 1.05);
+      targetThrust = 2;
+    } else if (lungeActive) {
       targetSpeed = cruise * (1.2 + TUNING.lungePower * 0.5);
       targetThrust = 1.4 + this.lungePower * 0.6;
     } else if (this._wasCharging) {
@@ -160,7 +240,7 @@ export class PlayerController {
 
     if (targetSpeed > this.speed) {
       // accelerate — heavier animals build speed more slowly
-      const accel = (lungeActive ? 2.4 : 0.9) * (14 / sp.length);
+      const accel = (this._runup ? 1.8 : lungeActive ? 2.4 : 0.9) * (14 / sp.length);
       this.speed += (targetSpeed - this.speed) * damp(accel, dt);
     } else {
       // coast: hydrodynamic drag, faster bleed-off when well over target
@@ -171,12 +251,16 @@ export class PlayerController {
 
     // ---- steering: whale heading chases the aim ----
     const vertical = (input.ascend ? 1 : 0) - (input.descend ? 1 : 0);
-    const desiredPitch = THREE.MathUtils.clamp(this.aimPitch + vertical * 0.75, -1.2, 1.2);
-    const maxTurn = TUNING.turnRate * sp.turnRate * 0.5 * (0.35 + 0.65 * Math.min(1, speedN + 0.2));
+    const desiredPitch = this._runup
+      ? sp.breachClimb + vertical * 0.26 // auto-climb, +-15 deg trim
+      : THREE.MathUtils.clamp(this.aimPitch + vertical * 0.75, -1.2, 1.2);
+    const maxTurn = TUNING.turnRate * sp.turnRate * 0.5 * (0.35 + 0.65 * Math.min(1, speedN + 0.2)) * control
+      * (this._runup ? 1.4 : 1);
+    const maxPitchTurn = this._runup ? maxTurn * 1.2 : maxTurn * 0.8;
     const yawErr = wrapAngle(this.aimYaw - this.yaw);
     const pitchErr = desiredPitch - this.pitch;
     const wantYawVel = THREE.MathUtils.clamp(yawErr * 2.2, -maxTurn, maxTurn);
-    const wantPitchVel = THREE.MathUtils.clamp(pitchErr * 2.2, -maxTurn * 0.8, maxTurn * 0.8);
+    const wantPitchVel = THREE.MathUtils.clamp(pitchErr * 2.2, -maxPitchTurn, maxPitchTurn);
     const angAccel = damp(3.2, dt);
     this._yawVel += (wantYawVel - this._yawVel) * angAccel;
     this._pitchVel += (wantPitchVel - this._pitchVel) * angAccel;
@@ -202,14 +286,27 @@ export class PlayerController {
     this.velocity.y += vertical * 2.0 * dt * Math.max(0, 1 - speedN);
     this.position.addScaledVector(this.velocity, dt);
 
-    // ---- bounds ----
+    // ---- breach: the run-up reaches the surface ----
+    if (this._runup && this.position.y >= -0.2) {
+      this._launch(bodyFwd);
+      this._finishFrame(dt, input, cruise, maxTurn, lungeActive);
+      return;
+    }
+
+    // ---- bounds (the surface is soft: whales loll with their backs out) ----
     if (this.position.y < this.bounds.minY) {
       this.position.y = this.bounds.minY;
       if (this.velocity.y < 0) this.velocity.y = 0;
-    } else if (this.position.y > this.bounds.maxY) {
-      this.position.y = this.bounds.maxY;
+    } else if (this.position.y > this.bounds.maxY && !this._runup) {
+      this.position.y += (this.bounds.maxY - this.position.y) * damp(4, dt);
       if (this.velocity.y > 0) this.velocity.y = 0;
     }
+    this._finishFrame(dt, input, cruise, maxTurn, lungeActive);
+  }
+
+  // Shared end of frame: horizontal bounds, camera, and state for the whale mesh.
+  _finishFrame(dt, input, cruise, maxTurn, lungeActive) {
+    const speedN = this.speed / cruise;
     const horiz = Math.hypot(this.position.x, this.position.z);
     if (horiz > this.bounds.radius) {
       const k = this.bounds.radius / horiz;
@@ -220,7 +317,7 @@ export class PlayerController {
 
     // ---- camera ----
     this._updateCamera(dt);
-    const fovTarget = Math.max(0, speedN - 0.6) * 7;
+    const fovTarget = Math.max(0, speedN - 0.6) * 7 + (this.mode === 'air' ? 4 : 0);
     this.fovOffset += (fovTarget - this.fovOffset) * damp(2, dt);
 
     // ---- state for whale mesh + game ----
@@ -236,8 +333,110 @@ export class PlayerController {
     st.time += dt;
     st.forward = input.forward ? 1 : 0;
     st.isLunging = lungeActive;
+    st.airborne = this.mode === 'air';
 
     this.whale.update(dt, st);
+  }
+
+  _emit(type, data) {
+    if (this.onEvent) this.onEvent(type, data);
+  }
+
+  // Leave the water. Launch quality q = speed/vExitMax x angleFactor
+  // (1 at 70-80 deg climb, 0.6 at 45 deg); real gravity then decides clearance.
+  _launch(bodyFwd) {
+    const sp = this.sp;
+    const L = sp.length * this.scale;
+    const deg = THREE.MathUtils.radToDeg(this.pitch);
+    const angleFactor = deg >= 70 ? 1 : THREE.MathUtils.clamp(0.6 + (0.4 * (deg - 45)) / 25, 0.6, 1);
+    const q = Math.min(1, this.speed / sp.vExitMax) * angleFactor;
+    const v = sp.vExitMax * q;
+    const sinP = Math.max(0.2, Math.sin(this.pitch));
+    const vy = v * sinP;
+    const h = v * Math.cos(this.pitch);
+    const hl = Math.hypot(bodyFwd.x, bodyFwd.z) || 1;
+    const fx = bodyFwd.x / hl, fz = bodyFwd.z / hl;
+    this.velocity.set(fx * h, vy, fz * h);
+
+    this.mode = 'air';
+    this._runup = false;
+    this.breachReady = false;
+
+    // twist: species default; the mouse biases direction and adds up to 40%
+    const tAir = Math.max(0.6, (2 * vy) / G);
+    const bias = this._twistBias;
+    const dir = Math.abs(bias) > 0.15 ? Math.sign(bias) : Math.random() < 0.5 ? -1 : 1;
+    const twist = Math.min(sp.twistMax, sp.twistDefault * (1 + 0.4 * Math.abs(bias)));
+    this._twist = (dir * twist) / tAir;
+    this._twistLeft = twist;
+
+    const apex = (vy * vy) / (2 * G) + this.position.y;
+    const clearance = THREE.MathUtils.clamp((apex + 0.5 * L * sinP) / (L * sinP), 0, 1);
+    this._launchInfo = { clearance, q, twist };
+
+    // witness camera: stay on whichever side of the whale the camera already is
+    _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    const side = Math.sign(
+      (this.camera.position.x - this.position.x) * _right.x + (this.camera.position.z - this.position.z) * _right.z,
+    ) || 1;
+    this._witnessPos.set(
+      this.position.x + _right.x * side * 2.5 * L + fx * 0.6 * L,
+      0.3 * L,
+      this.position.z + _right.z * side * 2.5 * L + fz * 0.6 * L,
+    );
+
+    this._emit('breach', { position: this.position, forward: bodyFwd, vy, q, clearance });
+  }
+
+  // Ballistic flight: gravity, nose pitches over, body twists onto side/back.
+  _updateAir(dt, input, cruise) {
+    this.velocity.y -= G * dt;
+    const hd = Math.exp(-0.02 * dt);
+    this.velocity.x *= hd;
+    this.velocity.z *= hd;
+    this.position.addScaledVector(this.velocity, dt);
+
+    this.pitch = Math.max(-1.3, this.pitch - 1.1 * dt);
+    this._pitchVel = 0;
+    this._yawVel *= Math.exp(-dt * 3);
+    const dr = Math.min(Math.abs(this._twist * dt), this._twistLeft);
+    this._twistLeft -= dr;
+    this.roll += Math.sign(this._twist) * dr;
+    this.thrust += (0 - this.thrust) * damp(3, dt);
+    this.speed = this.velocity.length();
+
+    // slow-motion around the apex (~0.7 s window)
+    const slow = TUNING.breachSlowmo && Math.abs(this.velocity.y) < G * 0.35 ? 0.45 : 1;
+    this.timeScale += (slow - this.timeScale) * damp(7, dt);
+
+    _euler.set(this.pitch, this.yaw, this.roll, 'YXZ');
+    this.whale.group.quaternion.setFromEuler(_euler);
+    this.whale.group.position.copy(this.position);
+
+    // re-entry once the body's centre drops through the surface
+    if (this.position.y <= 0 && this.velocity.y < 0) {
+      const impact = -this.velocity.y;
+      const twisted = this._launchInfo.twist - this._twistLeft;
+      // landing on the side/back throws the full splash; a belly flop less
+      const attitude = Math.abs(wrapAngle(this.roll)) >= THREE.MathUtils.degToRad(60) ? 1 : 0.7;
+      this.mode = 'swim';
+      this.roll = wrapAngle(this.roll);
+      this.velocity.multiplyScalar(0.35);
+      this.speed *= 0.35;
+      this.pitch = THREE.MathUtils.clamp(this.pitch, -1.2, 1.2);
+      this._submerge = 1.8;
+      this._cooldown = 4;
+      this.shake = Math.min(1.2, 0.5 + impact / 12);
+      this._emit('splash', {
+        position: this.position,
+        speed: impact,
+        attitude,
+        clearance: this._launchInfo.clearance,
+        twist: THREE.MathUtils.radToDeg(twisted),
+      });
+    }
+
+    this._finishFrame(dt, input, cruise, 1, false);
   }
 
   get mouthPosition() {

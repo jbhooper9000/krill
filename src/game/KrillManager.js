@@ -166,7 +166,7 @@ export class KrillManager {
       cloud.flee.position[2] = whale.group.position.z;
 
       // home drifts slowly and follows player depth
-      cloud.homeCenter.y += (whale.group.position.y - cloud.homeCenter.y) * Math.min(1, dt * 0.15);
+      cloud.homeCenter.y += (Math.min(whale.group.position.y, -6) - cloud.homeCenter.y) * Math.min(1, dt * 0.15);
       cloud.homeCenter.x += Math.sin(time * 0.05 + cloud.homeCenter.x * 0.01) * dt * 1.2;
       cloud.homeCenter.z += Math.cos(time * 0.04 + cloud.homeCenter.z * 0.01) * dt * 1.2;
       cloud.home.position[0] = cloud.homeCenter.x;
@@ -212,7 +212,7 @@ export class KrillManager {
       school.flee.position[1] = whale.group.position.y;
       school.flee.position[2] = whale.group.position.z;
 
-      school.homeCenter.y += (whale.group.position.y - school.homeCenter.y) * Math.min(1, dt * 0.1);
+      school.homeCenter.y += (Math.min(whale.group.position.y, -6) - school.homeCenter.y) * Math.min(1, dt * 0.1);
       school.homeCenter.x += Math.sin(time * 0.06 + school.homeCenter.z) * dt * 1.6;
       school.homeCenter.z += Math.cos(time * 0.05 + school.homeCenter.x) * dt * 1.6;
       school.home.position[0] = school.homeCenter.x;

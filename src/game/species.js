@@ -4,6 +4,13 @@
 export const SPECIES = {
   humpback: {
     id: 'humpback',
+    // Breach (design doc s5): surge cost in krill, run-up climb angle, max exit
+    // speed (m/s), twist default/max (rad). Humpbacks are the acrobats.
+    breachKrill: 150,
+    breachClimb: 1.31, // 75 deg
+    vExitMax: 9.5,
+    twistDefault: 2.44, // 140 deg
+    twistMax: 3.49, // 200 deg
     name: 'Humpback',
     emoji: '🐋',
     // Body proportions (all relative to body length L)
@@ -27,6 +34,12 @@ export const SPECIES = {
   },
   blue: {
     id: 'blue',
+    // blues rarely breach, and only partially
+    breachKrill: 260,
+    breachClimb: 1.05, // 60 deg
+    vExitMax: 7.0,
+    twistDefault: 0.7, // 40 deg
+    twistMax: 1.22, // 70 deg
     name: 'Blue',
     emoji: '🐳',
     length: 22,
@@ -46,6 +59,11 @@ export const SPECIES = {
   },
   sperm: {
     id: 'sperm',
+    breachKrill: 200, // design doc: 4 squid once squid exist
+    breachClimb: 1.4, // 80 deg
+    vExitMax: 9.0,
+    twistDefault: 1.57, // 90 deg
+    twistMax: 2.27, // 130 deg
     name: 'Sperm',
     emoji: '🐋',
     length: 16,

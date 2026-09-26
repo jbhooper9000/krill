@@ -63,6 +63,36 @@ export class UI {
     }
   }
 
+  setBreach(charge, ready, cost = 1) {
+    $('breach-fill').style.width = `${Math.round(Math.min(1, charge / cost) * 100)}%`;
+    $('breach-wrap').classList.toggle('ready', ready);
+    if (!this._promptTimer) {
+      $('breach-hint').textContent = ready ? 'dive, then hold F' : 'eat krill to charge';
+    }
+  }
+
+  // Short one-line message in the breach prompt (e.g. why F did nothing).
+  prompt(text) {
+    $('breach-hint').textContent = text;
+    clearTimeout(this._promptTimer);
+    this._promptTimer = setTimeout(() => { this._promptTimer = null; }, 1800);
+  }
+
+  toast(text) {
+    const el = $('toast');
+    el.textContent = text;
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+  }
+
+  breach(count) {
+    const el = $('breach-wrap');
+    el.classList.remove('fired');
+    void el.offsetWidth;
+    el.classList.add('fired');
+  }
+
   levelUp(level, zoneName) {
     $('levelup-title').textContent = `Zone ${level} — ${zoneName}`;
     $('levelup-sub').textContent = 'You grew. The depths open below you.';

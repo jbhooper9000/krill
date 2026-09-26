@@ -124,6 +124,33 @@ const scenarios = {
     for (let n = 0; n < 6; n++) { await sleep(1500); console.log('feed', JSON.stringify(await sample())); }
     await shot('feed');
   },
+  // Charge the surge, start deep, hold F: logs the arc + screenshots.
+  // Pass --view side to pin a side-on camera just above the waterline.
+  async breach() {
+    const view = opt('view', 'follow');
+    await evaljs(`(() => { krill.surge = 1; const c = krill.controller;
+      c.position.set(0, -1.9 * c.sp.length, 0); return 1; })()`);
+    if (view === 'side') { await hideHud(); await pinCamera(2.2, 0, 0.3); }
+    await key('keyDown', 'KeyW', 'w');
+    await sleep(600);
+    await key('keyDown', 'KeyF', 'f');
+    let shots = 0, lastMode = 'swim', splashed = false;
+    for (let n = 0; n < 70; n++) {
+      await sleep(350);
+      const s = await evaljs(`(() => { const c = krill.controller; return { mode: c.mode, y: +c.position.y.toFixed(2),
+        vy: +c.velocity.y.toFixed(2), pitch: +c.pitch.toFixed(2), roll: +c.roll.toFixed(2), speed: +c.speed.toFixed(1),
+        runup: c._runup, ts: +c.timeScale.toFixed(2), surge: +krill.surge.toFixed(2), breaches: krill.breaches,
+        toast: document.getElementById('toast').textContent, hint: document.getElementById('breach-hint').textContent,
+        spray: krill.splash.spray.alpha.reduce((a, v) => a + (v > 0), 0),
+        bubbles: krill.splash.bubbles.alpha.reduce((a, v) => a + (v > 0), 0) }; })()`);
+      console.log('breach', JSON.stringify(s));
+      if (s.mode === 'air' && shots < 3 && n % 2 === 0) await shot(`breach-air-${shots++}`);
+      if (lastMode === 'air' && s.mode === 'swim') splashed = true;
+      if (splashed && shots < 6) { await shot(`breach-splash-${shots++}`); }
+      lastMode = s.mode;
+      if (shots >= 6) break;
+    }
+  },
   async shots() {
     await hideHud();
     await key('keyDown', 'KeyW', 'w');

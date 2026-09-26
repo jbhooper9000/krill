@@ -11,6 +11,8 @@ export const TUNABLES = [
   { id: 'turnRate', label: 'Turn rate', min: 0.3, max: 3.0, step: 0.1, value: 2.2 },
   { id: 'cameraDist', label: 'Camera distance', min: 0.3, max: 1.8, step: 0.05, value: 1.8 },
   { id: 'lungePower', label: 'Lunge power', min: 1.5, max: 4.0, step: 0.1, value: 2.4 },
+  { id: 'breachCost', label: 'Breach surge cost ×', min: 0.1, max: 2, step: 0.05, value: 1 },
+  { id: 'breachSlowmo', label: 'Breach slow-mo (0/1)', min: 0, max: 1, step: 1, value: 1 },
   { id: 'krillPerLevel', label: 'Krill per level', min: 40, max: 500, step: 20, value: 220 },
 ];
 

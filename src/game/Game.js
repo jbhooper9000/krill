@@ -5,6 +5,7 @@ import { PlayerController } from './PlayerController.js';
 import { KrillManager } from './KrillManager.js';
 import { Effects } from './Effects.js';
 import { Input } from './Input.js';
+import { Splash } from './Splash.js';
 import { SPECIES, ZONES } from './species.js';
 import { TUNING } from './Tuning.js';
 import { TuningPanel } from '../ui/TuningPanel.js';
@@ -24,6 +25,7 @@ export class Game {
     this.camera = new THREE.PerspectiveCamera(58, 1, 0.1, 500);
 
     this.world = new World(this.scene);
+    this.splash = new Splash(this.scene, this.world.waterLevel);
     this.effects = new Effects(this.renderer, this.scene, this.camera);
     this.input = new Input(canvas);
 
@@ -64,9 +66,10 @@ export class Game {
     this.whale = new Whale(speciesId);
 
     const sp = SPECIES[speciesId];
-    const bounds = { minY: this.world.floorY + sp.length * 0.4, maxY: -sp.length * 0.35, radius: 170 };
+    const bounds = { minY: this.world.floorY + sp.length * 0.4, maxY: -sp.length * 0.08, radius: 170 };
 
     this.controller = new PlayerController(this.camera, this.whale, speciesId, bounds);
+    this.controller.onEvent = (type, data) => this._onWhaleEvent(type, data);
     this.scene.add(this.whale.group);
 
     this.krill = new KrillManager(this.scene, bounds);
@@ -77,6 +80,12 @@ export class Game {
     this.krillThisLevel = 0;
     this.targetScale = 1;
     this.whale.group.scale.setScalar(1);
+    this.surge = 0; // 0..1 breach charge
+    this.breaches = 0;
+    this._bout = 0; // breaches in the current bout
+    this._lastLanding = -Infinity;
+    this._lungeCatch = 0;
+    this.ui.setBreach(0, false, 1);
 
     this.running = true;
     this.paused = false;
@@ -118,6 +127,52 @@ export class Game {
     this.ui.setZone(zone.name, this.level);
   }
 
+  // Surge fills from krill; a big lunge (40+ krill) fills it 1.5x faster.
+  // Bout rule: a follow-up breach within 25 s of landing costs half (max 3).
+  _breachCost() {
+    const inBout = this._elapsed - this._lastLanding < 25 && this._bout > 0 && this._bout < 3;
+    return inBout ? 0.5 : 1;
+  }
+
+  _updateSurge(eaten) {
+    const c = this.controller;
+    if (c.state.isLunging) this._lungeCatch += eaten;
+    else this._lungeCatch = 0;
+    if (eaten > 0) {
+      const bonus = this._lungeCatch >= 40 ? 1.5 : 1;
+      this.surge = Math.min(1, this.surge + (eaten * bonus) / (this.whale.sp.breachKrill * TUNING.breachCost));
+    }
+    const cost = this._breachCost();
+    c.breachReady = this.surge >= cost && c.mode === 'swim';
+    this.ui.setBreach(this.surge, c.breachReady, cost);
+  }
+
+  _onWhaleEvent(type, data) {
+    const size = this.whale.sp.length * this.whale.group.scale.x;
+    if (type === 'breach') {
+      const cost = this._breachCost();
+      this._bout = cost < 1 ? this._bout + 1 : 1;
+      this.surge = Math.max(0, this.surge - cost);
+      this.breaches++;
+      this.splash.exit(data.position, size, data.forward);
+      this.splash.shedFrom(this.whale.group, this.whale.sp.length, 1.4);
+      this.ui.breach(this.breaches);
+    } else if (type === 'splash') {
+      this._lastLanding = this._elapsed;
+      this.splash.impact(data.position, size, data.speed * data.attitude);
+      this._punch = 0.6;
+      // a breach is a display of strength: it counts toward growth
+      this.krillThisLevel += Math.round(this.threshold(this.level) * 0.15);
+      const flop = data.attitude < 1 ? ' · belly flop' : '';
+      this.ui.toast(`Breach · ${Math.round(data.clearance * 100)}% clear · twist ${Math.round(data.twist)}°${flop}`);
+    } else if (type === 'breach-denied') {
+      this.ui.prompt(data.reason);
+    } else if (type === 'breach-abort') {
+      this.surge *= 0.8;
+      this.ui.prompt('Breach aborted');
+    }
+  }
+
   get depth() {
     return this.controller ? Math.max(0, -this.controller.position.y) : 0;
   }
@@ -154,7 +209,9 @@ export class Game {
 
   _loop() {
     requestAnimationFrame(this._loop);
-    const dt = Math.min(0.05, this._clock.getDelta());
+    const rawDt = Math.min(0.05, this._clock.getDelta());
+    // breach apex slow-motion scales the whole simulation
+    const dt = rawDt * (this.controller ? this.controller.timeScale : 1);
     this._elapsed += dt;
 
     // Esc toggle pause
@@ -176,6 +233,8 @@ export class Game {
         this.krillThisLevel += eaten;
         this.ui.addKrill(this.krill.totalEaten);
       }
+      this._updateSurge(eaten);
+      this.splash.update(dt, this.camera);
 
       this.world.update(dt, this.camera);
       this._updateGrowth(dt);
@@ -185,6 +244,7 @@ export class Game {
       // visible live; feeding is disabled so tuning doesn't change score.
       this.world.update(dt, this.camera);
       this.krill.update(dt, this._elapsed, this.whale, this.controller, false);
+      this.splash.update(dt, this.camera);
     } else {
       // still advance slow ambient when paused (snow, caustics) for a living backdrop
       this.world.update(dt * 0.3, this.camera);

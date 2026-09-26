@@ -54,6 +54,7 @@ export class Whale {
     this._turnS = 0; // smoothed body bends
     this._pitchS = 0;
     this._engulf = 0; // rorqual throat-pouch inflation after a lunge
+    this._airS = 0; // smoothed airborne blend
     this._build();
   }
 
@@ -447,11 +448,13 @@ export class Whale {
       obj.rotation.z = rz0 + Math.atan(syA[i]);
     }
 
-    // pectorals: gentle stroke, trim with pitch, dip the inside fin in turns
+    // pectorals: symmetric stroke + pitch trim (mirrored per side), the inside
+    // fin dips in turns, and they flare out when airborne
+    this._airS += ((state.airborne ? 1 : 0) - this._airS) * k(state.airborne ? 4 : 1.5);
     const stroke = Math.sin(this._phase + 1.2) * 0.06 * Math.min(1, thrust + 0.3);
-    const trim = -this._pitchS * 0.25;
-    this._flipperL.rotation.x = stroke + trim + this._turnS * 0.25;
-    this._flipperR.rotation.x = stroke + trim + this._turnS * 0.25;
+    const sym = stroke - this._pitchS * 0.25 - this._airS * (0.55 + 0.15 * Math.sin(state.time * 5));
+    this._flipperL.rotation.x = -sym + this._turnS * 0.25;
+    this._flipperR.rotation.x = sym + this._turnS * 0.25;
   }
 
   // Mouth position in whale-group space (includes the model's +X→-Z turn).
