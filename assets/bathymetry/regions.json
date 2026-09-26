@@ -1,0 +1,34 @@
+{
+  "note": "Hand-authored regions / POIs for Monterey Bay, in WGS84 lat/lon (project with manifest.projection). Checked in order; the first match wins. circle: centre + radius (m). corridor: polyline + halfWidth (m), e.g. a canyon axis traced from the bathymetry. polygon: ring of [lat, lon]. Optional minDepth/maxDepth (m, positive down) restrict a region to water of that depth at the query point. 'start' marks default spawn points.",
+  "regions": [
+    { "id": "coast", "name": "Coastline", "kind": "land", "type": "all", "maxDepth": 0 },
+    { "id": "moss-landing", "name": "Monterey Canyon head", "kind": "poi", "type": "circle", "center": [36.8015, -121.8000], "radius": 1500 },
+    { "id": "mars", "name": "MARS hydrophone", "kind": "poi", "type": "circle", "center": [36.7128, -122.1868], "radius": 900, "note": "MBARI cabled observatory node, 891 m" },
+    { "id": "cannery-row", "name": "Cannery Row kelp forest", "kind": "poi", "type": "circle", "center": [36.6160, -121.8980], "radius": 1100, "maxDepth": 40 },
+    { "id": "point-lobos", "name": "Point Lobos kelp forest", "kind": "poi", "type": "circle", "center": [36.5190, -121.9460], "radius": 1500, "maxDepth": 40 },
+    { "id": "davidson", "name": "Davidson Seamount", "kind": "poi", "type": "circle", "center": [35.7200, -122.7200], "radius": 14000 },
+    { "id": "ano-nuevo", "name": "Año Nuevo upwelling plume", "kind": "poi", "type": "circle", "center": [37.0900, -122.3400], "radius": 9000 },
+
+    { "id": "monterey-canyon", "name": "Monterey Canyon", "kind": "canyon", "type": "corridor", "halfWidth": 2600,
+      "path": [[36.8030, -121.7900], [36.8000, -121.8300], [36.7950, -121.8700], [36.7900, -121.9000], [36.7850, -121.9600], [36.7800, -122.0200],
+               [36.7650, -122.0600], [36.7450, -122.1000], [36.7100, -122.1000], [36.6900, -122.1000], [36.6500, -122.1300], [36.6300, -122.1600],
+               [36.6150, -122.2500], [36.6300, -122.3500], [36.6400, -122.4500], [36.6300, -122.5500], [36.5800, -122.7500], [36.5000, -123.0000]] },
+    { "id": "soquel-canyon", "name": "Soquel Canyon", "kind": "canyon", "type": "corridor", "halfWidth": 1600,
+      "path": [[36.8470, -121.9530], [36.8300, -121.9650], [36.8100, -121.9850], [36.7900, -122.0000], [36.7800, -122.0150]] },
+    { "id": "carmel-canyon", "name": "Carmel Canyon", "kind": "canyon", "type": "corridor", "halfWidth": 1800,
+      "path": [[36.5500, -121.9500], [36.5650, -121.9750], [36.5850, -121.9950], [36.6000, -122.0300], [36.6200, -122.0450], [36.6400, -122.0600], [36.6600, -122.0700]] },
+
+    { "id": "santa-cruz-shelf", "name": "Santa Cruz shelf", "kind": "shelf", "type": "polygon", "maxDepth": 160,
+      "ring": [[37.1500, -122.6000], [37.1500, -121.8500], [36.8600, -121.7900], [36.8150, -121.9000], [36.8250, -122.0500], [36.8700, -122.3000], [36.9300, -122.6000]] },
+    { "id": "southern-shelf", "name": "Southern Monterey Bay shelf", "kind": "shelf", "type": "polygon", "maxDepth": 160,
+      "ring": [[36.7900, -121.7700], [36.7800, -121.9500], [36.7300, -121.9800], [36.6600, -121.9700], [36.6000, -121.8800], [36.6000, -121.7700]] },
+    { "id": "big-sur-slope", "name": "Big Sur slope", "kind": "slope", "type": "polygon",
+      "ring": [[36.5500, -121.9000], [36.5500, -122.2000], [35.6000, -122.2000], [35.6000, -121.2000]] },
+    { "id": "outer-bay", "name": "Outer Monterey Bay", "kind": "open", "type": "polygon",
+      "ring": [[37.0600, -122.5600], [37.0600, -121.7700], [36.4400, -121.7700], [36.4400, -122.5600]] },
+    { "id": "open-pacific", "name": "Open Pacific", "kind": "open", "type": "all" }
+  ],
+  "start": {
+    "default": { "name": "Monterey Canyon head", "lat": 36.7905, "lon": -121.8700, "note": "southern rim of the upper canyon in ~140 m of water, looking north into it; humpbacks feed along these edges" }
+  }
+}
