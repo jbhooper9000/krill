@@ -35,7 +35,7 @@ const particleFrag = /* glsl */ `
 `;
 
 class ParticlePool {
-  constructor(scene, count, color, { additive = false } = {}) {
+  constructor(scene, count, color, { additive = false, world = null } = {}) {
     this.count = count;
     this.pos = new Float32Array(count * 3);
     this.vel = new Float32Array(count * 3);
@@ -70,6 +70,8 @@ class ParticlePool {
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
     });
     mat.uniforms.uMap.value = makeSoftSprite();
+    // water-aware: absorbed along the underwater part of the view ray only
+    if (world) world.patchMaterial(mat, { additive });
     this.points = new THREE.Points(geo, mat);
     this.points.frustumCulled = false;
     this.points.renderOrder = 20;
@@ -97,11 +99,11 @@ class ParticlePool {
 }
 
 export class Splash {
-  constructor(scene, waterLevel = 0) {
+  constructor(scene, waterLevel = 0, world = null) {
     this.scene = scene;
     this.waterLevel = waterLevel;
-    this.spray = new ParticlePool(scene, 6000, 0xf4fbff);
-    this.bubbles = new ParticlePool(scene, 4000, 0xdff6ff, { additive: true });
+    this.spray = new ParticlePool(scene, 6000, 0xf4fbff, { world });
+    this.bubbles = new ParticlePool(scene, 4000, 0xdff6ff, { additive: true, world });
     this._shed = null; // { group, length, time, duration }
 
     // foam slicks: a few pooled discs lying on the surface

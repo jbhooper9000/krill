@@ -34,7 +34,7 @@ export class Game {
     this.camera = new THREE.PerspectiveCamera(58, 1, 0.1, 500);
 
     this.world = new World(this.scene);
-    this.splash = new Splash(this.scene, this.world.waterLevel);
+    this.splash = new Splash(this.scene, this.world.waterLevel, this.world);
     this.effects = new Effects(this.renderer, this.scene, this.camera);
     this.input = new Input(canvas);
 
