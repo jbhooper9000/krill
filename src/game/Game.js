@@ -23,7 +23,9 @@ export class Game {
     // driven per-frame by Effects' depth-aware auto exposure.
     this.renderer.toneMapping = THREE.AgXToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // 1.5 cap: the water model is per-pixel; 2x DPR would ~double shading cost
+    // on high-DPI laptops for little visible gain in soft underwater images.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(58, 1, 0.1, 500);

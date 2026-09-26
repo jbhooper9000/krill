@@ -95,7 +95,7 @@ export function makeSkinTexture(topColor, bottomColor, mottle = true, seed = 1) 
 export function makeSandTexture() {
   const size = 512;
   const c = canvas(size, (ctx, s) => {
-    ctx.fillStyle = '#4a3f30';
+    ctx.fillStyle = '#7d6f56'; // sand albedo ~0.2-0.3 linear
     ctx.fillRect(0, 0, s, s);
     let r = 7;
     const rand = () => {

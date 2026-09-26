@@ -454,7 +454,7 @@ export class World {
       this.surface.position.z = camera.position.z;
       this._dome.position.copy(camera.position);
       if (camera.isPerspectiveCamera) {
-        const h = (typeof window !== 'undefined' ? window.innerHeight * Math.min(window.devicePixelRatio || 1, 2) : 720);
+        const h = (typeof window !== 'undefined' ? window.innerHeight * Math.min(window.devicePixelRatio || 1, 1.5) : 720);
         this._snowMat.uniforms.uPixelScale.value = h / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
       }
     }

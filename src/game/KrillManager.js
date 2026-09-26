@@ -99,8 +99,8 @@ function makeKrillMaterial() {
 function makeFishMaterial() {
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
-    roughness: 0.2,
-    metalness: 0.85,
+    roughness: 0.14,
+    metalness: 0.9,
     envMapIntensity: 1.8,
   });
   mat.onBeforeCompile = (shader) => {

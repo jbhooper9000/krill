@@ -4,6 +4,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import { WATER_GLSL, waterUniform, WATER_LEVEL } from './WaterMedium.js';
 import { makeTileableNoiseTexture } from './textures.js';
 
@@ -182,15 +183,20 @@ export class Effects {
     const size = renderer.getSize(new THREE.Vector2());
     const pr = renderer.getPixelRatio();
 
-    // HDR target with a depth texture (needed by the shaft ray-march) and
-    // 4x MSAA (the default framebuffer's antialias does not apply to composer
-    // targets).
+    // HDR target with a depth texture (needed by the shaft ray-march).
+    // No MSAA: measured on an RTX 3070 at 1080p, any MSAA sample count on this
+    // half-float + depth-texture target cost ~1.2 ms/frame (resolve blits),
+    // i.e. 3x the whole rest of the pipeline; FXAA at the end costs ~0.03 ms.
     const rt = new THREE.WebGLRenderTarget(size.x * pr, size.y * pr, {
       type: THREE.HalfFloatType,
-      samples: 4,
       depthTexture: new THREE.DepthTexture(size.x * pr, size.y * pr),
     });
     this.composer = new EffectComposer(renderer, rt);
+    // EffectComposer clones rt for its second buffer, and a cloned texture
+    // shares its Source — i.e. the SAME GL depth texture. The shaft pass reads
+    // one buffer's depth while drawing into the other, so they must not share
+    // it (feedback loop -> black frame).
+    this.composer.renderTarget2.depthTexture = new THREE.DepthTexture(size.x * pr, size.y * pr);
 
     this.renderPass = new RenderPass(scene, camera);
     this.composer.addPass(this.renderPass);
@@ -217,12 +223,19 @@ export class Effects {
     this.output = new OutputPass();
     this.composer.addPass(this.output);
 
+    // FXAA on tone-mapped sRGB values (what it is designed for), last pass.
+    this.fxaa = new ShaderPass(FXAAShader);
+    this.fxaa.uniforms.resolution.value.set(1 / (size.x * pr), 1 / (size.y * pr));
+    this.composer.addPass(this.fxaa);
+
     this._exposure = null;
     this._frame = 0;
   }
 
   resize(w, h) {
     this.composer.setSize(w, h);
+    const pr = this.renderer.getPixelRatio();
+    this.fxaa.uniforms.resolution.value.set(1 / (w * pr), 1 / (h * pr));
     this.bloom.resolution.set(w, h);
   }
 
