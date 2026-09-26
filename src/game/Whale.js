@@ -62,13 +62,21 @@ export class Whale {
   _makeSkinMaterial() {
     const sp = this.sp;
     const map = makeSkinTexture(sp.skinTop, sp.skinBottom, sp.mottle, sp.id.length * 13);
+    // Whale skin is matte-ish rubbery tissue with a thin wet film: a rough
+    // dielectric base, a faint low-intensity clearcoat for the film and a
+    // little sheen for the soft grazing-angle lift seen in footage. Under water
+    // the environment is diffuse, so the resulting specular is broad and soft.
     return new THREE.MeshPhysicalMaterial({
       map,
       color: 0xffffff,
-      roughness: 0.42,
-      metalness: 0.02,
-      clearcoat: 0.55,
-      clearcoatRoughness: 0.35,
+      roughness: 0.66,
+      metalness: 0,
+      clearcoat: 0.12,
+      clearcoatRoughness: 0.5,
+      sheen: 0.35,
+      sheenRoughness: 0.6,
+      sheenColor: new THREE.Color(0x7f98a4),
+      envMapIntensity: 0.9,
       side: THREE.DoubleSide,
     });
   }

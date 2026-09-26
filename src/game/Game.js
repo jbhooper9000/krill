@@ -14,10 +14,15 @@ export class Game {
     this.canvas = canvas;
     this.ui = ui;
 
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    // Everything is rendered through Effects' composer into a 4x MSAA HDR
+    // target, so default-framebuffer MSAA would be wasted work.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    // AgX: rolls saturated blues/cyans off toward white gracefully (ACES skews
+    // them and clips the Snell's window / sun glints harshly). Exposure is
+    // driven per-frame by Effects' depth-aware auto exposure.
+    this.renderer.toneMapping = THREE.AgXToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
     this.scene = new THREE.Scene();

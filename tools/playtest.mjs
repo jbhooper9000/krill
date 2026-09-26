@@ -5,7 +5,8 @@
 //
 // scenarios: play (swim/turn/lunge/glide), side (side-on camera sequence),
 //            feed (swim through a krill cloud), shots (static views: behind,
-//            side, above-surface, looking up, deep)
+//            side, above-surface, looking up, deep), above (camera above the
+//            surface: breach views, horizon, straddling the waterline)
 // Headless Chrome renders with SwiftShader (software), so expect ~5-10 fps —
 // game time (dt clamped to 0.05) runs slower than wall time.
 import { spawn } from 'node:child_process';
@@ -39,7 +40,9 @@ const server = spawn(process.execPath, [path.join(root, 'serve.js')], {
 });
 const browser = spawn(chrome, [
   '--headless=new', `--remote-debugging-port=${cdpPort}`, '--window-size=1280,720',
-  '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
+  // PT_GPU=1 renders on the real GPU (for perf numbers) instead of SwiftShader
+  ...(process.env.PT_GPU ? ['--use-angle=d3d11', '--enable-gpu'] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']),
+  '--ignore-gpu-blocklist',
   `--user-data-dir=${path.join(out, '.chrome-profile')}`, 'about:blank',
 ], { stdio: 'ignore' });
 
@@ -136,6 +139,27 @@ const scenarios = {
     await pinCamera(1.2, 0.6, 1.2); await sleep(600); await shot('shots-near-surface');
     await evaljs(`krill.controller.position.y = krill.controller.bounds.minY + 4; 1`);
     await pinCamera(1.4, 0.2, 0.6); await sleep(900); await shot('shots-deep');
+  },
+  // Scripted steps for debugging: PT_STEPS='[["js expr", "shotName"], ...]'
+  // (shotName may be null; each step waits 900 ms before the shot).
+  async steps() {
+    await hideHud();
+    for (const [js, name] of JSON.parse(process.env.PT_STEPS || '[]')) {
+      if (js) console.log('eval', JSON.stringify(await evaljs(js)));
+      await sleep(900);
+      if (name) await shot(name);
+    }
+  },
+  // Camera above the water (breach views): pinned at an absolute height.
+  async above() {
+    await hideHud();
+    await evaljs(`krill.controller.position.y = -3; 1`); // clamped to bounds.maxY
+    const pinAbs = (ox, y, oz, lookY, lookFwd = 0) => evaljs(`krill.controller._updateCamera = function(){ const p=this.position; const L=this.sp.length;
+      this.camera.position.set(p.x + L*${ox}, ${y}, p.z + L*${oz}); this.camera.lookAt(p.x, ${lookY === null ? 'p.y' : lookY}, p.z - L*${lookFwd}); }; 1`);
+    await pinAbs(0.9, 3, 0.9, null); await sleep(900); await shot('above');
+    await pinAbs(0.2, 3, 1.6, 1.5, 3); await sleep(900); await shot('above-horizon');
+    await pinAbs(0.3, 0.04, 1.4, 0.0, 2); await sleep(900); await shot('above-waterline');
+    await pinAbs(0.3, -0.5, 1.4, 1.0, 2); await sleep(900); await shot('above-just-below');
   },
 };
 
