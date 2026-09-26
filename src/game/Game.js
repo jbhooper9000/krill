@@ -12,6 +12,8 @@ import { SPECIES } from './species.js';
 import { TUNING } from './Tuning.js';
 import { TuningPanel } from '../ui/TuningPanel.js';
 
+const _previewRight = new THREE.Vector3();
+
 export class Game {
   constructor(canvas, ui) {
     this.canvas = canvas;
@@ -67,6 +69,7 @@ export class Game {
   }
 
   start(speciesId) {
+    this._clearPreview();
     this.speciesId = speciesId;
     this.whale = new Whale(speciesId);
 
@@ -266,10 +269,79 @@ export class Game {
       this.splash.update(dt, this.camera);
     } else {
       // still advance slow ambient when paused (snow, caustics) for a living backdrop
+      if (!this.running) this._updatePreview(rawDt);
       this.world.update(dt * 0.3, this.camera);
     }
 
     this.effects.render(dt);
+  }
+
+  // ---- species-select preview ------------------------------------------
+  // The menu is the live scene: the selected whale idles in open water in
+  // front of a slowly drifting camera. Self-contained; cleared by start().
+  previewSpecies(id) {
+    if (this.running || !SPECIES[id]) return;
+    const old = this._preview;
+    if (old && old.id === id) return;
+    if (old) this._disposeWhale(old.whale);
+    const whale = new Whale(id);
+    whale.group.rotation.order = 'YXZ';
+    this.scene.add(whale.group);
+    const sp = SPECIES[id];
+    this._preview = {
+      id, whale, t: old ? old.t : 0,
+      depth: old ? old.depth : sp.startDepth,
+      state: { speed: 0.5, thrust: 0.45, turn: 0, pitchRate: 0, pitch: 0, feeding: 0, lunge: 0,
+        lungeCharge: 0, time: 0, forward: 1, isLunging: false, airborne: false },
+    };
+  }
+
+  _updatePreview(dt) {
+    const p = this._preview;
+    if (!p) return;
+    const sp = SPECIES[p.id];
+    const L = sp.length;
+    p.t += dt;
+    const t = p.t;
+    // glide between habitat depths when the species changes
+    p.depth += (sp.startDepth - p.depth) * (1 - Math.exp(-dt * 1.6));
+    this.world.setDepth(p.depth);
+
+    const g = p.whale.group;
+    const yaw = Math.PI / 2; // nose toward -X: swims right-to-left across the view
+    g.position.set(0, -p.depth + Math.sin(t * 0.35) * 0.25, 0);
+    g.rotation.set(Math.sin(t * 0.3) * 0.05, yaw + Math.sin(t * 0.13) * 0.06, Math.sin(t * 0.21) * 0.06);
+    p.state.time = t;
+    p.state.turn = Math.sin(t * 0.13) * 0.25;
+    p.state.pitchRate = Math.cos(t * 0.3) * 0.12;
+    p.whale.update(dt, p.state);
+
+    // slow orbit around a front three-quarter view, from a little above so the
+    // sunlit back reads and the text on the left sits over deeper water; the
+    // whale is framed right of centre
+    const az = -0.35 + Math.sin(t * 0.045) * 0.3;
+    const c = this.camera;
+    const dist = L * Math.max(1.2, 1.2 / c.aspect); // keep the whole whale in a portrait window
+    const offset = L * 0.3 * Math.min(1, c.aspect);
+    c.position.set(Math.sin(az) * dist, g.position.y + L * 0.2, Math.cos(az) * dist);
+    const right = _previewRight.set(Math.cos(az), 0, -Math.sin(az));
+    c.lookAt(g.position.x - right.x * offset, g.position.y - L * 0.12, g.position.z - right.z * offset);
+    if (Math.abs(c.fov - 58) > 0.01) { c.fov = 58; c.updateProjectionMatrix(); }
+  }
+
+  _clearPreview() {
+    if (!this._preview) return;
+    this._disposeWhale(this._preview.whale);
+    this._preview = null;
+  }
+
+  _disposeWhale(whale) {
+    this.scene.remove(whale.group);
+    whale.group.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+      for (const m of mats) { if (m.map) m.map.dispose(); m.dispose(); }
+    });
   }
 
   destroy() {
