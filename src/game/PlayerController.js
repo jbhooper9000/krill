@@ -23,7 +23,7 @@ export class PlayerController {
     this.camera = camera;
     this.whale = whale;
     this.sp = SPECIES[speciesId];
-    this.bounds = bounds; // { minY, maxY, radius }
+    this.bounds = bounds; // { minY, maxY, floorAt?(x, z) -> seafloor y }
 
     // aim (camera) — raw target and smoothed value
     this._aimYawTarget = 0;
@@ -139,7 +139,10 @@ export class PlayerController {
     }
 
     // don't let the camera poke through the surface or floor
-    _desiredCam.y = THREE.MathUtils.clamp(_desiredCam.y, this.bounds.minY - L * 0.3, this._camCeil);
+    const camFloor = this.bounds.floorAt
+      ? this.bounds.floorAt(_desiredCam.x, _desiredCam.z) + 1.5
+      : this.bounds.minY - L * 0.3;
+    _desiredCam.y = THREE.MathUtils.clamp(_desiredCam.y, camFloor, this._camCeil);
 
     if (snap) {
       this._camPos.copy(_desiredCam);
@@ -216,6 +219,9 @@ export class PlayerController {
       else if (this._cooldown > 0) reason = 'Catching your breath';
       else if (depth < 0.8 * L) reason = 'Too shallow — dive deeper first';
       else if (depth > 4 * L) reason = 'Too deep — rise closer to the surface';
+      else if (this.bounds.floorAt && -this.bounds.floorAt(this.position.x, this.position.z) < 1.5 * L) {
+        reason = 'Too shallow here — find deeper water'; // design doc 5.3: water depth >= 1.5 L
+      }
       if (reason) this._emit('breach-denied', { reason });
       else {
         this._runup = true;
@@ -314,8 +320,21 @@ export class PlayerController {
     }
 
     // ---- bounds (the surface is soft: whales loll with their backs out) ----
-    if (this.position.y < this.bounds.minY) {
-      this.position.y = this.bounds.minY;
+    // Seafloor: terrain-aware when bounds.floorAt(x, z) is given — clearance
+    // under the body centre and the head, eased up so canyon walls don't snap.
+    let minY = this._floorMinY(bodyFwd, L);
+    if (minY > this.bounds.maxY) {
+      // too shallow to fit (beach, reef top): the shore stops the whale
+      this.position.x -= this.velocity.x * dt;
+      this.position.z -= this.velocity.z * dt;
+      this.velocity.x *= 0.5; this.velocity.z *= 0.5;
+      this.speed *= 0.9;
+      minY = this.bounds.maxY;
+    }
+    if (this.position.y < minY) {
+      const hard = minY - L * 0.25;
+      this.position.y += (minY - this.position.y) * damp(10, dt);
+      if (this.position.y < hard) this.position.y = hard;
       if (this.velocity.y < 0) this.velocity.y = 0;
     } else if (this.position.y > this.bounds.maxY && !this._runup) {
       this.position.y += (this.bounds.maxY - this.position.y) * damp(4, dt);
@@ -325,15 +344,20 @@ export class PlayerController {
     this._finishFrame(dt, input, cruise, maxTurn, lungeActive);
   }
 
-  // Shared end of frame: horizontal bounds, camera, and state for the whale mesh.
+  // Lowest allowed body-centre y: floor under the centre and the head + clearance.
+  _floorMinY(bodyFwd, L) {
+    const floorAt = this.bounds.floorAt;
+    if (!floorAt) return this.bounds.minY;
+    const p = this.position;
+    const hx = p.x + bodyFwd.x * L * 0.45, hz = p.z + bodyFwd.z * L * 0.45;
+    const floor = Math.max(floorAt(p.x, p.z), floorAt(hx, hz));
+    return Math.max(this.bounds.minY ?? -Infinity, floor + L * 0.4);
+  }
+
+  // Shared end of frame: camera and state for the whale mesh. (No horizontal
+  // bounds: the streamed Monterey world has no edges.)
   _finishFrame(dt, input, cruise, maxTurn, lungeActive) {
     const speedN = this.speed / cruise;
-    const horiz = Math.hypot(this.position.x, this.position.z);
-    if (horiz > this.bounds.radius) {
-      const k = this.bounds.radius / horiz;
-      this.position.x *= k;
-      this.position.z *= k;
-    }
     this.whale.group.position.copy(this.position);
 
     // ---- camera ----

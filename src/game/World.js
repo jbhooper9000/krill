@@ -73,7 +73,9 @@ const surfaceFrag = /* glsl */ `
 `;
 
 export class World {
-  constructor(scene) {
+  // options.flatFloor = false hides the flat arena floor, rocks and kelp (the
+  // streamed Monterey terrain replaces them).
+  constructor(scene, options = {}) {
     this.scene = scene;
     this.waterLevel = SURFACE_Y;
     this.floorY = FLOOR_Y;
@@ -87,6 +89,11 @@ export class World {
     this._buildSnow();
     this._buildRays();
     this._buildBackground();
+    if (options.flatFloor === false) {
+      this.floor.visible = false;
+      this._rocks.visible = false;
+      this._kelp.visible = false;
+    }
 
     this._currentZone = -1;
     this._fogColor = new THREE.Color(0x1a6f7a);
@@ -381,6 +388,14 @@ export class World {
         ray.rotation.y = Math.atan2(dx, dz);
       }
     }
+  }
+
+  // Floating origin: the scene shifted by -(dx, dz) (see Terrain.onRebase).
+  rebase(dx, dz) {
+    const p = this._snowPos;
+    for (let i = 0; i < this._snowCount; i++) { p[i * 3] -= dx; p[i * 3 + 2] -= dz; }
+    this.snow.geometry.attributes.position.needsUpdate = true;
+    for (const g of [this._rays, this._rocks, this._kelp, this.floor]) { g.position.x -= dx; g.position.z -= dz; }
   }
 
   // ---- zone / depth ------------------------------------------------------

@@ -66,8 +66,22 @@ src/
     Input.js              keyboard/mouse/pointer-lock
     species.js            species + depth-zone config
     textures.js           procedural canvas textures (skin, sand, caustics…)
+    Terrain.js            streamed Monterey Bay seafloor: quadtree LOD chunks,
+                          procedural detail, regions/POIs, floating origin
   ui/UI.js                HUD + menus
+assets/bathymetry/        real Monterey Bay bathymetry tiles + manifest + map
+tools/bathymetry/         offline pipeline that builds assets/bathymetry
 ```
 
-All art is procedural (no external assets): the whale, krill, fish, sand,
-caustics and sky are generated at runtime.
+All art is procedural: the whale, krill, fish, sand, caustics and sky are
+generated at runtime. The one external dataset is the seafloor: real NOAA NCEI
+bathymetry of Monterey Bay (public domain, credit NOAA NCEI), see
+`tools/bathymetry/README.md`.
+
+### World coordinates
+
+The scene uses metres, `x` east, `z` south, `y` up (sea level 0). The start point
+(the upper Monterey Canyon) is the scene origin. The origin floats: when the
+camera gets 2 km from it, `Terrain` rebases and calls `onRebase(dx, dz)`
+listeners, and `Game` shifts the whale, camera, krill, splash and snow. Absolute
+bay metres = scene + `terrain.origin`.

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { World } from './World.js';
+import { Terrain } from './Terrain.js';
 import { Whale } from './Whale.js';
 import { PlayerController } from './PlayerController.js';
 import { KrillManager } from './KrillManager.js';
@@ -26,7 +27,15 @@ export class Game {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(58, 1, 0.1, 500);
 
-    this.world = new World(this.scene);
+    this.world = new World(this.scene, { flatFloor: false });
+    // ---- Monterey terrain (streamed bathymetry + floating origin) ----
+    this.terrain = new Terrain(this.scene, {
+      // underwater light model hook: applied if the lighting engineer's World provides it
+      patchMaterial: this.world.patchMaterial ? (m) => this.world.patchMaterial(m) : null,
+    });
+    this.terrain.onRebase((dx, dz) => this._onRebase(dx, dz));
+    this.region = null;
+    this._regionTimer = 0;
     this.splash = new Splash(this.scene, this.world.waterLevel);
     this.effects = new Effects(this.renderer, this.scene, this.camera);
     this.input = new Input(canvas);
@@ -64,9 +73,14 @@ export class Game {
     this.whale = new Whale(speciesId);
 
     const sp = SPECIES[speciesId];
-    const bounds = { minY: this.world.floorY + sp.length * 0.4, maxY: -sp.length * 0.08, radius: 170 };
+    // terrain-aware floor, no horizontal edges (the scene origin is the start point)
+    const bounds = { minY: -Infinity, maxY: -sp.length * 0.08, floorAt: (x, z) => this.terrain.heightAt(x, z) };
 
     this.controller = new PlayerController(this.camera, this.whale, speciesId, bounds);
+    const startFloor = this.terrain.heightAt(0, 0);
+    if (this.controller.position.y < startFloor + sp.length) {
+      this.controller.position.y = Math.min(-2, startFloor + sp.length);
+    }
     this.controller.onEvent = (type, data) => this._onWhaleEvent(type, data);
     this.scene.add(this.whale.group);
 
@@ -74,7 +88,7 @@ export class Game {
     this.clock = new Clock(9);
     this.phys = new Physiology(sp);
 
-    this.krill = new KrillManager(this.scene, bounds);
+    this.krill = new KrillManager(this.scene, bounds, this.terrain);
     this.krill.spawnAround(this.controller.position, this._krillY());
     this.surge = 0; // 0..1 breach charge
     this.breaches = 0;
@@ -96,7 +110,38 @@ export class Game {
   // Monterey bathymetry lands.)
   _krillY() {
     const day = this.clock ? this.clock.daylight : 1;
-    return -(14 + 41 * day);
+    const y = -(14 + 41 * day);
+    // stay above the local seafloor (patches are also clamped per site)
+    const p = this.controller && this.controller.position;
+    return p ? Math.min(-6, Math.max(y, this.terrain.heightAt(p.x, p.z) + 15)) : y;
+  }
+
+  // Floating origin: Terrain moved the scene by -(dx, dz); shift what we own.
+  _onRebase(dx, dz) {
+    const c = this.controller;
+    if (c) {
+      for (const v of [c.position, c._camPos, c._camLook, c._camTarget, c._witnessPos]) { v.x -= dx; v.z -= dz; }
+      this.whale.group.position.copy(c.position);
+    }
+    this.camera.position.x -= dx;
+    this.camera.position.z -= dz;
+    this.camera.updateMatrixWorld();
+    if (this.krill) this.krill.rebase(dx, dz);
+    this.splash.rebase(dx, dz);
+    if (this.world.rebase) this.world.rebase(dx, dz);
+  }
+
+  // Region / POI under the player (e.g. "Monterey Canyon"), checked twice a second.
+  _updateRegion(dt) {
+    this._regionTimer -= dt;
+    if (this._regionTimer > 0 || !this.controller) return;
+    this._regionTimer = 0.5;
+    const r = this.terrain.regionAt(this.controller.position.x, this.controller.position.z);
+    const name = r ? r.name : null;
+    if (name !== (this.region && this.region.name)) {
+      this.region = r;
+      if (this.ui.setRegion) this.ui.setRegion(name);
+    }
   }
 
   rebuildKrill() {
@@ -262,10 +307,15 @@ export class Game {
       this.world.update(dt * 0.3, this.camera);
     }
 
+    // stream/LOD the seafloor around the camera (may rebase the floating origin)
+    this.terrain.update(this.camera);
+    if (this.running) this._updateRegion(rawDt);
+
     this.effects.render(dt);
   }
 
   destroy() {
     window.removeEventListener('resize', this._onResize);
+    this.terrain.dispose();
   }
 }

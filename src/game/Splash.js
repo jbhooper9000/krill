@@ -209,6 +209,15 @@ export class Splash {
     }
   }
 
+  // Floating origin: the scene shifted by -(dx, dz) (see Terrain.onRebase).
+  rebase(dx, dz) {
+    for (const pool of [this.spray, this.bubbles]) {
+      for (let i = 0; i < pool.count; i++) { pool.pos[i * 3] -= dx; pool.pos[i * 3 + 2] -= dz; }
+      pool.flush();
+    }
+    for (const f of this._foam) { f.mesh.position.x -= dx; f.mesh.position.z -= dz; }
+  }
+
   // Water streaming off the whale's body while it is airborne.
   shedFrom(group, length, duration = 1.2) {
     this._shed = { group, length, time: 0, duration };
