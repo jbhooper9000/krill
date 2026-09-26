@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700;900&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@200;300;400&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./src/styles.css" />
@@ -24,153 +24,136 @@
     <div id="app">
       <canvas id="game"></canvas>
 
-      <!-- HUD -->
-      <div id="hud" class="hidden">
-        <div class="hud-top-left panel">
-          <div class="krill-counter">
-            <svg class="krill-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3 14c2-1 4-1 6 0s4 1 6 0 4-1 6 0" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-              <path d="M4 18c1.5-.8 3-.8 4.5 0s3 .8 4.5 0 3-.8 4.5 0 2 .8 3 0" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" opacity=".6"/>
-              <circle cx="10" cy="8" r="1.4" fill="currentColor"/>
-              <circle cx="14.5" cy="8.6" r="1.1" fill="currentColor" opacity=".8"/>
-            </svg>
-            <span id="krill-count" class="stat-value">0</span>
-            <span class="stat-label">krill eaten</span>
-          </div>
+      <!-- In-game HUD: ink on glass. Every element auto-hides when idle (see UI.js). -->
+      <div id="hud" class="hidden" aria-hidden="true">
+        <!-- context line (top-left), shown on start and on zone change -->
+        <div id="hud-place" class="hud-el hud-place"></div>
+
+        <!-- depth tape (right), only while depth changes -->
+        <div id="hud-depth" class="hud-el hud-depth">
+          <div id="depth-ticks" class="depth-ticks"></div>
+          <div class="depth-mark"><span class="depth-caret">&#9656;</span><span id="depth-value">0</span><span class="depth-unit">m</span></div>
         </div>
 
-        <div class="hud-top-right panel">
-          <div class="zone-info">
-            <div class="zone-line">
-              <span class="zone-name" id="zone-name">Shallows</span>
-              <span class="zone-level" id="zone-level">Zone 1</span>
-            </div>
-            <div class="depth-line">
-              <span class="stat-label">depth</span>
-              <span class="stat-value" id="depth-value">0 m</span>
-            </div>
-          </div>
+        <!-- centre: lunge ring (inner) + breach ring (outer), concentric -->
+        <div class="hud-centre">
+          <svg class="rings" viewBox="-60 -60 120 120" aria-hidden="true">
+            <g id="breach-ring" class="hud-el breach-ring">
+              <circle class="track" r="44" />
+              <circle id="breach-arc" class="arc" r="44" pathLength="100" />
+            </g>
+            <g id="lunge-ring" class="hud-el lunge-ring">
+              <circle class="track" r="24" />
+              <circle id="lunge-arc" class="arc" r="24" pathLength="100" />
+              <circle class="dot" r="1.6" />
+            </g>
+          </svg>
+          <div id="breach-word" class="hud-el breach-word">Breach</div>
+          <div id="hud-prompt" class="hud-el hud-prompt"></div>
         </div>
 
-        <div class="hud-bottom">
-          <div class="growth-wrap panel">
-            <div class="growth-label">
-              <span>Growth</span>
-              <span id="growth-pct">0%</span>
-            </div>
-            <div class="growth-bar">
-              <div id="growth-fill" class="growth-fill"></div>
-            </div>
-            <div class="growth-hint" id="growth-hint">Eat krill to grow and dive deeper</div>
-          </div>
+        <!-- first-time control hint (one verb at a time) -->
+        <div id="hud-hint" class="hud-el hud-hint"></div>
 
-          <div id="lunge-wrap" class="lunge-wrap panel">
-            <div class="lunge-label">LUNGE <span class="key-hint">[RMB hold]</span></div>
-            <div class="lunge-bar"><div id="lunge-fill" class="lunge-fill"></div></div>
-          </div>
-
-          <div id="breach-wrap" class="lunge-wrap panel breach-wrap">
-            <div class="lunge-label">BREACH <span id="breach-hint" class="key-hint">eat krill to charge</span></div>
-            <div class="lunge-bar"><div id="breach-fill" class="lunge-fill breach-fill"></div></div>
-          </div>
+        <!-- top-centre: post-breach toast and growth notes -->
+        <div class="hud-top">
+          <div id="toast" class="hud-el toast"></div>
         </div>
 
-        <div id="toast" class="toast"></div>
-
-        <div id="levelup-banner" class="levelup-banner hidden">
-          <div class="levelup-inner">
-            <div class="levelup-kicker">You grew!</div>
-            <div class="levelup-title" id="levelup-title">Zone 2 — Twilight</div>
-            <div class="levelup-sub" id="levelup-sub">You now dive into deeper, darker waters.</div>
-          </div>
+        <!-- breath arc (doc 4.1 / 6.2): only below 50 % O2, amber below 25 % -->
+        <div id="hud-o2" class="hud-el hud-o2">
+          <svg viewBox="0 0 120 26" aria-hidden="true"><path class="track" d="M2 24 Q60 -8 118 24" pathLength="100" /><path id="o2-arc" class="arc" d="M2 24 Q60 -8 118 24" pathLength="100" /></svg>
+          <span class="o2-label">O<sub>2</sub></span>
         </div>
 
-        <div id="controls-hint" class="controls-hint">
-          <span><b>W</b> / hold <b>LMB</b> swim</span>
-          <span><b>Mouse</b> steer</span>
-          <span><b>Space</b> rise</span>
-          <span><b>Shift</b> dive</span>
-          <span><b>RMB</b> lunge feed</span>
-          <span><b>F</b> breach</span>
-          <span><b>Esc</b> pause</span>
-          <span><b>T</b> tune</span>
+        <!-- stomach: quiet, surfaces only when nearly full -->
+        <div id="hud-stomach" class="hud-el hud-stomach">
+          <span class="lbl">Stomach</span>
+          <span class="line"><i id="stomach-fill"></i></span>
+          <span id="stomach-pct" class="val">0%</span>
+        </div>
+        <div id="hud-surge" class="hud-el hud-surge">
+          <div class="surge-line">
+            <i id="surge-fill" class="fill"></i>
+            <i id="surge-tick" class="tick"></i>
+          </div>
+          <span class="surge-label">S U R G E<span id="surge-ready" class="ready-word"> &middot; READY</span></span>
+          <span id="surge-pct" class="val">0%</span>
         </div>
       </div>
 
-      <!-- Start screen -->
-      <div id="start-screen" class="overlay">
-        <div class="start-inner">
-          <h1 class="title">KRILL</h1>
-          <p class="tagline">Glide the deep. Feast on the swarm. Grow into a giant.</p>
+      <!-- O2 veil: diegetic vignette + desaturation below 30 % O2, tunnel on blackout -->
+      <div id="o2-veil" class="o2-veil" aria-hidden="true"></div>
 
-          <div class="species-label">Choose your whale</div>
-          <div class="species-cards" id="species-cards">
-            <button class="species-card" data-species="humpback">
-              <div class="species-emoji">🐋</div>
-              <div class="species-name">Humpback</div>
-              <div class="species-desc">Balanced glider with a mighty lunge. The classic krill hunter.</div>
-              <ul class="species-stats">
-                <li><span>Size</span><i>▮▮▮▯▯</i></li>
-                <li><span>Speed</span><i>▮▮▮▯▯</i></li>
-                <li><span>Lunge</span><i>▮▮▮▮▮</i></li>
-              </ul>
-            </button>
-            <button class="species-card selected" data-species="blue">
-              <div class="species-emoji">🐳</div>
-              <div class="species-name">Blue</div>
-              <div class="species-desc">The largest animal ever. Huge mouth, enormous appetite, stately pace.</div>
-              <ul class="species-stats">
-                <li><span>Size</span><i>▮▮▮▮▮</i></li>
-                <li><span>Speed</span><i>▮▮▮▯▯</i></li>
-                <li><span>Lunge</span><i>▮▮▮▯▯</i></li>
-              </ul>
-            </button>
-            <button class="species-card" data-species="sperm">
-              <div class="species-emoji">🐋</div>
-              <div class="species-name">Sperm</div>
-              <div class="species-desc">A deep diver built for the dark. Starts in the twilight and goes deeper.</div>
-              <ul class="species-stats">
-                <li><span>Size</span><i>▮▮▮▮▯</i></li>
-                <li><span>Speed</span><i>▮▮▮▯▯</i></li>
-                <li><span>Lunge</span><i>▮▮▮▯▯</i></li>
-              </ul>
-            </button>
+      <!-- Start / species select: the live ocean is the menu -->
+      <div id="start-screen" class="overlay menu" role="dialog" aria-label="Choose your whale">
+        <h1 class="wordmark">KRILL</h1>
+
+        <div class="species-info" aria-live="polite">
+          <div id="sp-name" class="sp-name">Blue</div>
+          <div id="sp-latin" class="sp-latin">Balaenoptera musculus</div>
+          <div id="sp-facts" class="sp-facts">24 m &middot; 100 t &middot; dives 10&ndash;20 min</div>
+          <p id="sp-desc" class="sp-desc"></p>
+        </div>
+
+        <div class="menu-bar">
+          <div class="species-tabs" id="species-tabs" role="tablist" aria-label="Species">
+            <button class="tab" role="tab" data-species="humpback">Humpback</button>
+            <button class="tab" role="tab" data-species="blue">Blue</button>
+            <button class="tab" role="tab" data-species="sperm">Sperm</button>
+            <span class="tabs-hint">&larr; / &rarr; or click</span>
           </div>
-
-          <button id="start-btn" class="start-btn">Dive In</button>
-          <p class="start-controls">
-            <span><b>W</b> swim</span> · <span><b>Mouse</b> steer</span> ·
-            <span><b>Space</b>/<b>Shift</b> rise/dive</span> · <span><b>RMB</b> lunge</span> · <span><b>T</b> tune</span>
-          </p>
+          <button id="start-btn" class="text-btn dive-btn">Dive in <span class="key">&#9166;</span></button>
         </div>
       </div>
 
-      <!-- Pause overlay -->
-      <div id="pause-screen" class="overlay hidden">
-        <div class="pause-inner">
-          <h2 class="title">Paused</h2>
-          <button id="resume-btn" class="start-btn">Resume</button>
-          <button id="restart-btn" class="start-btn ghost">Restart</button>
+      <!-- Pause: radial scrim + text only (the Monterey map arrives with E3) -->
+      <div id="pause-screen" class="overlay pause hidden" role="dialog" aria-label="Paused">
+        <div class="pause-scrim"></div>
+        <div class="pause-head">
+          <h2 class="pause-title">Paused</h2>
+          <div id="pause-species" class="pause-meta"></div>
+        </div>
+        <!-- map shell: bathymetric contours go here once the Monterey world exists -->
+        <div id="pause-map" class="pause-map" hidden></div>
+        <div class="pause-body">
+          <div id="pause-condition" class="pause-condition" hidden>
+            <span class="lbl">Condition</span>
+            <span class="cond-line"><i id="cond-fill"></i><i id="cond-dot" class="dot"></i><i id="cond-target" class="target"></i></span>
+            <span id="cond-val" class="val"></span>
+          </div>
+          <div id="pause-stats" class="pause-stats"></div>
+          <dl class="controls-list">
+            <dt>W / hold left mouse</dt><dd>Swim</dd>
+            <dt>Mouse</dt><dd>Steer</dd>
+            <dt>Space &middot; Shift</dt><dd>Rise &middot; dive</dd>
+            <dt>Hold right mouse</dt><dd>Charge lunge, release to burst</dd>
+            <dt>Hold F</dt><dd>Breach, when Surge is ready</dd>
+            <dt>Wheel</dt><dd>Camera distance</dd>
+            <dt>Esc &middot; T</dt><dd>Pause &middot; tuning</dd>
+          </dl>
+        </div>
+        <div class="pause-actions">
+          <button id="resume-btn" class="text-btn">Resume <span class="key">&#9166;</span></button>
+          <button id="restart-btn" class="text-btn quiet">Restart</button>
         </div>
       </div>
 
       <!-- Loading -->
-      <div id="loading-screen" class="overlay">
-        <div class="loading-inner">
-          <div class="loading-wave"><span></span><span></span><span></span><span></span></div>
-          <div class="loading-text">Surfacing…</div>
-        </div>
+      <div id="loading-screen" class="overlay loading">
+        <div class="loading-text">Surfacing&hellip;</div>
       </div>
 
-      <!-- Tuning panel -->
+      <!-- Tuning panel (dev tool) -->
       <div id="tuning-panel" class="tuning-panel hidden"></div>
 
       <!-- Runtime error overlay -->
-      <div id="error-screen" class="overlay hidden">
+      <div id="error-screen" class="overlay error hidden" role="alertdialog">
+        <div class="pause-scrim"></div>
         <div class="error-inner">
           <div class="error-title">Something broke the dive</div>
           <pre id="error-message"></pre>
-          <button id="error-reload-btn" class="start-btn">Reload</button>
+          <button id="error-reload-btn" class="text-btn">Reload</button>
         </div>
       </div>
     </div>
