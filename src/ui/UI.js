@@ -38,10 +38,37 @@ export class UI {
     const fill = $('growth-fill');
     fill.style.width = `${Math.round(pct * 100)}%`;
     $('growth-pct').textContent = `${Math.round(pct * 100)}%`;
-    const hint = $('growth-hint');
-    hint.textContent = pct >= 0.85
-      ? 'Almost there — one more feast to grow!'
-      : 'Eat krill to grow and dive deeper';
+  }
+
+  // Interim physiology readouts reusing the old panels; the glass-UI rebuild
+  // (feat/glass-ui) replaces these with the design-doc treatments.
+  setO2(o2, { blackout = false } = {}) {
+    this._o2 = o2;
+    this._blackout = blackout;
+    this._physHint();
+  }
+
+  setCondition(value, target) {
+    $('growth-fill').style.width = `${Math.round(Math.min(1, value / target) * 100)}%`;
+    $('growth-pct').textContent = `${Math.round(value)} / ${target}`;
+  }
+
+  setStomach(fill) {
+    this._stomach = fill;
+    this._physHint();
+  }
+
+  setClock(hh, mm) {
+    $('zone-name').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    $('zone-level').textContent = 'Monterey Bay';
+  }
+
+  blow() {}
+
+  _physHint() {
+    const o2 = Math.round((this._o2 ?? 1) * 100);
+    const st = Math.round((this._stomach ?? 0) * 100);
+    $('growth-hint').textContent = this._blackout ? 'BLACKOUT — surfacing' : `O₂ ${o2}% · stomach ${st}%`;
   }
 
   setZone(name, level) {

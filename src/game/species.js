@@ -29,6 +29,17 @@ export const SPECIES = {
     turnRate: 1.0,
     lungePower: 1.25,
     mouthRadius: 1.0,
+    // Physiology (design doc s4.1/4.2); budgets in game seconds (~4x real)
+    o2Budget: 120,
+    lungeO2: 0.08,
+    stomachKrill: 420,
+    conditionPerKrill: 0.02,
+    krillKg: 2,
+    metabolism: 0.012, // Condition points per second
+    startCondition: 40,
+    conditionTarget: 80,
+    filterTime: 3.5, // s of filtering after each lunge (rorquals)
+    blow: { height: 3, spread: 0.45, lean: 0 }, // bushy
     // Starting conditions
     startDepth: 14,
   },
@@ -55,6 +66,16 @@ export const SPECIES = {
     turnRate: 0.72,
     lungePower: 0.85,
     mouthRadius: 1.5,
+    o2Budget: 150,
+    lungeO2: 0.06,
+    stomachKrill: 800,
+    conditionPerKrill: 0.012,
+    krillKg: 2,
+    metabolism: 0.014,
+    startCondition: 40,
+    conditionTarget: 80,
+    filterTime: 4,
+    blow: { height: 9, spread: 0.18, lean: 0 }, // tall narrow column
     startDepth: 12,
   },
   sperm: {
@@ -79,6 +100,16 @@ export const SPECIES = {
     turnRate: 0.85,
     lungePower: 1.0,
     mouthRadius: 1.05,
+    o2Budget: 360,
+    lungeO2: 0.07,
+    stomachKrill: 350,
+    conditionPerKrill: 0.018,
+    krillKg: 2,
+    metabolism: 0.01,
+    startCondition: 40,
+    conditionTarget: 80,
+    filterTime: 0, // sperm whales suck prey in; no baleen filtering
+    blow: { height: 3, spread: 0.3, lean: 0.8 }, // angled forward-left (blowhole left of centre)
     startDepth: 34,
   },
 };

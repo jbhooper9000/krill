@@ -151,6 +151,31 @@ const scenarios = {
       if (shots >= 6) break;
     }
   },
+  // Nearly out of air at depth: expect blackout -> forced ascent -> blows -> recovery.
+  async breathe() {
+    await evaljs(`(() => { const c = krill.controller; c.position.set(0, -9, 0); krill.phys.o2 = 0.01; return 1; })()`);
+    for (let n = 0; n < 60; n++) {
+      await sleep(400);
+      const s = await evaljs(`(() => { const c = krill.controller, p = krill.phys; return { y: +c.position.y.toFixed(1),
+        pitch: +c.pitch.toFixed(2), o2: +p.o2.toFixed(2), blackout: p.blackout, atSurface: c.atSurface,
+        cond: +p.condition.toFixed(1), dives: p.stats.dives, hint: document.getElementById('growth-hint').textContent,
+        prompt: document.getElementById('breach-hint').textContent }; })()`);
+      console.log('breathe', JSON.stringify(s));
+      if (n === 30) await shot('breathe-surface');
+    }
+  },
+  // Whale at the surface with low O2, camera just above water: photograph the blows.
+  async blow() {
+    await hideHud();
+    await evaljs(`(() => { const c = krill.controller; c.position.set(0, c.bounds.maxY, 0); krill.phys.o2 = 0.3; return 1; })()`);
+    await pinCamera(1.3, 0.25, 1.0, 0.3);
+    for (let n = 0; n < 12; n++) {
+      await sleep(300);
+      const s = await evaljs(`({ o2: +krill.phys.o2.toFixed(2), atSurface: krill.controller.atSurface, spray: krill.splash.spray.alpha.reduce((a, v) => a + (v > 0), 0) })`);
+      console.log('blow', JSON.stringify(s));
+      if (s.spray > 150 && n % 3 === 0) await shot(`blow-${n}`);
+    }
+  },
   async shots() {
     await hideHud();
     await key('keyDown', 'KeyW', 'w');

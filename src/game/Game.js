@@ -6,7 +6,9 @@ import { KrillManager } from './KrillManager.js';
 import { Effects } from './Effects.js';
 import { Input } from './Input.js';
 import { Splash } from './Splash.js';
-import { SPECIES, ZONES } from './species.js';
+import { Physiology } from './Physiology.js';
+import { Clock } from './Clock.js';
+import { SPECIES } from './species.js';
 import { TUNING } from './Tuning.js';
 import { TuningPanel } from '../ui/TuningPanel.js';
 
@@ -38,10 +40,6 @@ export class Game {
     this._tDown = false;
     this.tuningPanel = new TuningPanel(() => this.rebuildKrill());
 
-    this.level = 1;
-    this.totalEaten = 0;
-    this.krillThisLevel = 0;
-    this.targetScale = 1;
     this._punch = 0;
 
     this._onResize = () => this._resize();
@@ -72,14 +70,12 @@ export class Game {
     this.controller.onEvent = (type, data) => this._onWhaleEvent(type, data);
     this.scene.add(this.whale.group);
 
-    this.krill = new KrillManager(this.scene, bounds);
-    this.krill.spawnAround(this.controller.position);
+    // time of day drives diel vertical migration of the krill
+    this.clock = new Clock(9);
+    this.phys = new Physiology(sp);
 
-    this.level = 1;
-    this.totalEaten = 0;
-    this.krillThisLevel = 0;
-    this.targetScale = 1;
-    this.whale.group.scale.setScalar(1);
+    this.krill = new KrillManager(this.scene, bounds);
+    this.krill.spawnAround(this.controller.position, this._krillY());
     this.surge = 0; // 0..1 breach charge
     this.breaches = 0;
     this._bout = 0; // breaches in the current bout
@@ -93,11 +89,14 @@ export class Game {
     this.input.lock();
     console.log('[Krill] started:', speciesId);
     this.ui.showHud();
-    this.ui.setZone(ZONES[0].name, 1);
   }
 
-  threshold(level) {
-    return Math.round(TUNING.krillPerLevel * Math.pow(1.5, level - 1));
+  // Krill layer depth (world y): ~55 m by day, rising to ~14 m at night.
+  // (Real E. pacifica: 150-250 m by day; scaled to this arena until the
+  // Monterey bathymetry lands.)
+  _krillY() {
+    const day = this.clock ? this.clock.daylight : 1;
+    return -(14 + 41 * day);
   }
 
   rebuildKrill() {
@@ -115,16 +114,6 @@ export class Game {
       this.tuningPanel.hide();
       this.input.lock();
     }
-  }
-
-  _levelUp() {
-    this.level++;
-    this.krillThisLevel = 0;
-    this.targetScale = Math.min(2.2, Math.pow(1.06, this.level - 1));
-    this._punch = 1;
-    const zone = this.world.setDepth(this.depth).zone;
-    this.ui.levelUp(this.level, zone.name);
-    this.ui.setZone(zone.name, this.level);
   }
 
   // Surge fills from krill; a big lunge (40+ krill) fills it 1.5x faster.
@@ -154,6 +143,7 @@ export class Game {
       this._bout = cost < 1 ? this._bout + 1 : 1;
       this.surge = Math.max(0, this.surge - cost);
       this.breaches++;
+      this.phys.breached();
       this.splash.exit(data.position, size, data.forward);
       this.splash.shedFrom(this.whale.group, this.whale.sp.length, 1.4);
       this.ui.breach(this.breaches);
@@ -161,12 +151,12 @@ export class Game {
       this._lastLanding = this._elapsed;
       this.splash.impact(data.position, size, data.speed * data.attitude);
       this._punch = 0.6;
-      // a breach is a display of strength: it counts toward growth
-      this.krillThisLevel += Math.round(this.threshold(this.level) * 0.15);
       const flop = data.attitude < 1 ? ' · belly flop' : '';
       this.ui.toast(`Breach · ${Math.round(data.clearance * 100)}% clear · twist ${Math.round(data.twist)}°${flop}`);
     } else if (type === 'breach-denied') {
       this.ui.prompt(data.reason);
+    } else if (type === 'lunge') {
+      this.phys.lungeStarted();
     } else if (type === 'breach-abort') {
       this.surge *= 0.8;
       this.ui.prompt('Breach aborted');
@@ -177,28 +167,40 @@ export class Game {
     return this.controller ? Math.max(0, -this.controller.position.y) : 0;
   }
 
-  _updateGrowth(dt) {
-    // whale scale animation
-    const cur = this.whale.group.scale.x;
-    const next = THREE.MathUtils.lerp(cur, this.targetScale, Math.min(1, dt * 3));
-    this.whale.group.scale.setScalar(next);
-
-    // camera FOV: speed widening + level-up punch
+  _updateView(dt) {
+    // camera FOV: speed widening + breach punch
     if (this._punch > 0) this._punch = Math.max(0, this._punch - dt * 1.6);
     const fov = 58 + this.controller.fovOffset + Math.sin(this._punch * Math.PI) * 6;
     if (Math.abs(fov - this.camera.fov) > 0.01) {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();
     }
-
-    const thresh = this.threshold(this.level);
-    const zone = this.world.setDepth(this.depth);
-    this.ui.setGrowth(Math.min(1, this.krillThisLevel / thresh), this.level);
+    this.world.setDepth(this.depth);
     this.ui.setDepth(Math.round(this.depth));
-    if (zone.changed) this.ui.setZone(zone.zone.name, this.level);
+  }
 
-    // level-up check
-    if (this.krillThisLevel >= thresh) this._levelUp();
+  // Oxygen, blows, blackout, Condition and stomach.
+  _updatePhysiology(dt, input) {
+    const c = this.controller;
+    const phys = this.phys;
+    const ev = phys.update(dt, {
+      atSurface: c.atSurface,
+      exertion: c.thrust,
+      deepBreath: c.atSurface && input.ascend,
+    });
+    if (ev === 'blow') {
+      this.splash.blow(c.position, c.forwardDir, this.whale.sp.length * this.whale.group.scale.x, this.whale.sp.blow);
+      this.ui.blow();
+    } else if (ev === 'blackout') {
+      this.ui.prompt('Out of air — your body takes over');
+    } else if (ev === 'recovered') {
+      this.ui.prompt('Breathing again');
+    }
+    if (phys.takeStomachWarning()) this.ui.prompt('Stomach full — let it digest');
+    this.ui.setO2(phys.o2, { blackout: phys.blackout, atSurface: c.atSurface });
+    this.ui.setCondition(phys.condition, phys.target);
+    this.ui.setStomach(phys.stomach);
+    this.ui.setClock(this.clock.hh, this.clock.mm);
   }
 
   _togglePause() {
@@ -226,24 +228,34 @@ export class Game {
 
     if (this.running && !this.paused && !this.tuningOpen) {
       const input = this.input.frame();
+      // blackout: the player loses control while the body heads for air
+      this.controller.forceClimb = this.phys.blackout;
+      if (this.phys.blackout) {
+        input.lookX = input.lookY = 0;
+        input.lunge = input.breach = input.descend = false;
+        input.forward = true;
+      }
       this.controller.update(dt, input);
+      this.clock.update(dt);
 
-      const eaten = this.krill.update(dt, this._elapsed, this.whale, this.controller);
+      const room = Math.floor((1 - this.phys.stomach) * this.whale.sp.stomachKrill);
+      const eaten = this.krill.update(dt, this._elapsed, this.whale, this.controller, true, { krillY: this._krillY(), room });
       if (eaten > 0) {
-        this.krillThisLevel += eaten;
+        this.phys.swallow(eaten, this.controller.state.isLunging);
         this.ui.addKrill(this.krill.totalEaten);
       }
       this._updateSurge(eaten);
+      this._updatePhysiology(dt, input);
       this.splash.update(dt, this.camera);
 
       this.world.update(dt, this.camera);
-      this._updateGrowth(dt);
+      this._updateView(dt);
       this.ui.setLunge(this.controller.state.lungeCharge, this.controller.state.isLunging);
     } else if (this.tuningOpen) {
       // whale frozen, but boids keep moving so size/spacing/speed changes are
       // visible live; feeding is disabled so tuning doesn't change score.
       this.world.update(dt, this.camera);
-      this.krill.update(dt, this._elapsed, this.whale, this.controller, false);
+      this.krill.update(dt, this._elapsed, this.whale, this.controller, false, { krillY: this._krillY(), room: 0 });
       this.splash.update(dt, this.camera);
     } else {
       // still advance slow ambient when paused (snow, caustics) for a living backdrop

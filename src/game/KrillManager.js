@@ -33,6 +33,7 @@ const _xAxis = new THREE.Vector3();
 const _yAxis = new THREE.Vector3();
 const _zAxis = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+const _home = [0, 0, 0];
 
 export class KrillManager {
   constructor(scene, bounds) {
@@ -91,7 +92,9 @@ export class KrillManager {
     this.krillClouds.push({
       system, mesh, flee, home,
       homeCenter: new THREE.Vector3(...center),
-      respawn: [], // { index, delay }
+      depthOffset: (Math.random() - 0.5) * 16, // swarms spread through the DVM layer
+      dead: [], // eaten boid indices, regrown slowly
+      regrow: 0,
     });
   }
 
@@ -127,24 +130,23 @@ export class KrillManager {
     });
   }
 
-  spawnAround(playerPos) {
-    // three krill clouds + three fish schools, spread around the player depth
-    const offsets = [
-      [-34, 0, 20], [22, 6, -30], [40, -4, 12],
-    ];
+  // Krill patches are spread across the bay in the diel-migration layer
+  // (krillY); anchovy schools stay near the surface.
+  spawnAround(playerPos, krillY) {
+    const offsets = [[-34, 20], [60, -70], [-90, -40], [110, 60]];
     for (const o of offsets) {
-      const c = [playerPos.x + o[0], playerPos.y + o[1], playerPos.z + o[2]];
-      this._addKrillCloud(c);
+      this._addKrillCloud([playerPos.x + o[0], krillY + (Math.random() - 0.5) * 12, playerPos.z + o[1]]);
     }
-    const fishOffsets = [[-20, 8, -40], [45, -2, 30], [10, -10, 50]];
+    const fishOffsets = [[-20, -40], [45, 30], [10, 50]];
     for (const o of fishOffsets) {
-      const c = [playerPos.x + o[0], playerPos.y + o[1], playerPos.z + o[2]];
-      this._addFishSchool(c);
+      this._addFishSchool([playerPos.x + o[0], -8 - Math.random() * 10, playerPos.z + o[1]]);
     }
   }
 
   // Returns number of krill eaten this frame.
-  update(dt, time, whale, controller, allowFeeding = true) {
+  // env: { krillY (DVM layer centre, world y), room (krill the stomach can still take) }
+  update(dt, time, whale, controller, allowFeeding = true, env = { krillY: -40, room: Infinity }) {
+    let room = env.room;
     this.eatenThisFrame = 0;
 
     const mouthPos = controller.mouthPosition;
@@ -165,8 +167,9 @@ export class KrillManager {
       cloud.flee.position[1] = whale.group.position.y;
       cloud.flee.position[2] = whale.group.position.z;
 
-      // home drifts slowly and follows player depth
-      cloud.homeCenter.y += (Math.min(whale.group.position.y, -6) - cloud.homeCenter.y) * Math.min(1, dt * 0.15);
+      // home drifts slowly; its depth follows diel vertical migration
+      const layerY = Math.min(-6, env.krillY + cloud.depthOffset);
+      cloud.homeCenter.y += (layerY - cloud.homeCenter.y) * Math.min(1, dt * 0.02);
       cloud.homeCenter.x += Math.sin(time * 0.05 + cloud.homeCenter.x * 0.01) * dt * 1.2;
       cloud.homeCenter.z += Math.cos(time * 0.04 + cloud.homeCenter.z * 0.01) * dt * 1.2;
       cloud.home.position[0] = cloud.homeCenter.x;
@@ -177,7 +180,7 @@ export class KrillManager {
 
       // feeding
       if (allowFeeding) {
-        for (let i = 0; i < sys.count; i++) {
+        for (let i = 0; i < sys.count && room > 0; i++) {
           if (!sys.alive[i]) continue;
           const i3 = i * 3;
           const dx = sys.pos[i3] - _mouth.x;
@@ -188,19 +191,24 @@ export class KrillManager {
             if (sys.remove(i)) {
               this.totalEaten++;
               this.eatenThisFrame++;
-              cloud.respawn.push({ index: i, delay: 1.4 + Math.random() * 2.0 });
+              room--;
+              cloud.dead.push(i);
             }
           }
         }
       }
 
-      // respawn queue
-      for (let r = cloud.respawn.length - 1; r >= 0; r--) {
-        cloud.respawn[r].delay -= dt;
-        if (cloud.respawn[r].delay <= 0) {
-          sys.respawn(cloud.respawn[r].index, cloud.homeCenter.toArray(), 12);
-          cloud.respawn.splice(r, 1);
+      // patches are finite: biomass regrows over game hours, not seconds
+      if (cloud.dead.length > 0) {
+        const perSecond = sys.count / ((TUNING.regrowHours * 3600) / TUNING.timeCompression);
+        cloud.regrow += perSecond * dt;
+        while (cloud.regrow >= 1 && cloud.dead.length > 0) {
+          cloud.regrow -= 1;
+          _home[0] = cloud.homeCenter.x; _home[1] = cloud.homeCenter.y; _home[2] = cloud.homeCenter.z;
+          sys.respawn(cloud.dead.pop(), _home, 12);
         }
+      } else {
+        cloud.regrow = 0;
       }
 
       this._writeInstances(cloud.mesh, sys, TUNING.krillSize);
@@ -212,7 +220,6 @@ export class KrillManager {
       school.flee.position[1] = whale.group.position.y;
       school.flee.position[2] = whale.group.position.z;
 
-      school.homeCenter.y += (Math.min(whale.group.position.y, -6) - school.homeCenter.y) * Math.min(1, dt * 0.1);
       school.homeCenter.x += Math.sin(time * 0.06 + school.homeCenter.z) * dt * 1.6;
       school.homeCenter.z += Math.cos(time * 0.05 + school.homeCenter.x) * dt * 1.6;
       school.home.position[0] = school.homeCenter.x;
@@ -229,6 +236,7 @@ export class KrillManager {
   // Rebuild krill swarms (e.g. after a count change).
   rebuildKrill() {
     const homes = this.krillClouds.map((c) => c.homeCenter.clone());
+    // (rebuild resets biomass: it's a tuning tool)
     for (const cloud of this.krillClouds) {
       this.scene.remove(cloud.mesh);
       cloud.mesh.dispose();

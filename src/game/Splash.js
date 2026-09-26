@@ -44,6 +44,8 @@ class ParticlePool {
     this.baseSize = new Float32Array(count);
     this.size = new Float32Array(count);
     this.alpha = new Float32Array(count);
+    this.grav = new Float32Array(count).fill(1); // per-particle gravity scale
+    this.drag = new Float32Array(count); // per-particle air drag (1/s)
     this._next = 0;
     this.active = 0;
 
@@ -74,8 +76,10 @@ class ParticlePool {
     scene.add(this.points);
   }
 
-  spawn(x, y, z, vx, vy, vz, life, size) {
+  spawn(x, y, z, vx, vy, vz, life, size, grav = 1, drag = 0.4) {
     const i = this._next;
+    this.grav[i] = grav;
+    this.drag[i] = drag;
     this._next = (i + 1) % this.count;
     const i3 = i * 3;
     this.pos[i3] = x; this.pos[i3 + 1] = y; this.pos[i3 + 2] = z;
@@ -175,6 +179,36 @@ export class Splash {
     this._addFoam(pos, size * 1.6);
   }
 
+  // A blow at the surface: exhaled vapour + entrained seawater. Shape per
+  // species (design doc s4.1): humpback bushy ~3 m, blue a tall ~9 m column,
+  // sperm angled forward-left from its offset blowhole.
+  blow(pos, forward, size, shape) {
+    const y = Math.max(this.waterLevel + 0.2, pos.y + size * 0.1);
+    const hl = Math.hypot(forward.x, forward.z) || 1;
+    const fx = forward.x / hl, fz = forward.z / hl;
+    const lx = fz, lz = -fx; // left of the heading
+    // blowhole sits ~35% of the body length ahead of centre
+    const bx = pos.x + fx * size * 0.35, bz = pos.z + fz * size * 0.35;
+    const lean = shape.lean;
+    const dirX = (fx * 0.7 + lx * 0.7) * Math.sin(lean);
+    const dirZ = (fz * 0.7 + lz * 0.7) * Math.sin(lean);
+    const up = Math.cos(lean);
+    // mist rises against heavy drag, so launch fast enough to reach the height
+    const v0 = Math.sqrt(2 * GRAVITY * 0.35 * shape.height) * 2.2;
+    const n = Math.round(220 + shape.height * 25);
+    for (let k = 0; k < n; k++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = shape.spread * (0.3 + Math.random());
+      const v = v0 * (0.55 + Math.random() * 0.45);
+      this.spray.spawn(
+        bx + (Math.random() - 0.5) * 0.3, y, bz + (Math.random() - 0.5) * 0.3,
+        (dirX + Math.cos(a) * s) * v, up * v, (dirZ + Math.sin(a) * s) * v,
+        1.8 + Math.random() * 1.6, 0.25 + Math.random() * 0.5,
+        0.35, 1.3, // vapour: light, slowed quickly by air, lingers
+      );
+    }
+  }
+
   // Water streaming off the whale's body while it is airborne.
   shedFrom(group, length, duration = 1.2) {
     this._shed = { group, length, time: 0, duration };
@@ -240,9 +274,9 @@ export class Splash {
     for (let i = 0; i < sp.count; i++) {
       if (sp.life[i] <= 0) { sp.alpha[i] = 0; continue; }
       const i3 = i * 3;
-      sp.vel[i3 + 1] -= GRAVITY * dt;
-      const drag = Math.exp(-dt * 0.4);
+      const drag = Math.exp(-dt * sp.drag[i]);
       sp.vel[i3] *= drag; sp.vel[i3 + 2] *= drag;
+      sp.vel[i3 + 1] = sp.vel[i3 + 1] * (sp.drag[i] > 1 ? drag : 1) - GRAVITY * sp.grav[i] * dt;
       sp.pos[i3] += sp.vel[i3] * dt;
       sp.pos[i3 + 1] += sp.vel[i3 + 1] * dt;
       sp.pos[i3 + 2] += sp.vel[i3 + 2] * dt;

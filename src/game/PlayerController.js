@@ -66,6 +66,9 @@ export class PlayerController {
     this._cooldown = 0;
     this._launchInfo = { clearance: 0, q: 0, twist: 0 };
     this.timeScale = 1; // apex slow-motion, applied by Game to the whole sim
+    this._filter = 0; // rorquals filter the engulfed water after each lunge
+    this.forceClimb = false; // blackout: the body takes over and heads for air
+    this.atSurface = false; // blowhole clear of the water
     this.shake = 0;
     this._witness = 0; // blend toward the side-on "witness" camera while airborne
     this._witnessPos = new THREE.Vector3();
@@ -118,7 +121,8 @@ export class PlayerController {
     // pull back and allow the camera above the waterline during a breach
     const air = this.mode === 'air';
     this._camDistMul += ((air ? 1.35 : 1) - this._camDistMul) * damp(air ? 2 : 0.8, dt);
-    this._camCeil += ((air ? L * 0.6 : -0.6) - this._camCeil) * damp(air ? 3 : 1.2, dt);
+    const ceil = air ? L * 0.6 : this.atSurface ? L * 0.3 : -0.6;
+    this._camCeil += (ceil - this._camCeil) * damp(air ? 3 : 1.2, dt);
     const dist = L * TUNING.cameraDist * this.zoom * this._camDistMul;
 
     const fwd = this.forwardVector();
@@ -171,7 +175,9 @@ export class PlayerController {
 
     // ---- lunge charging / release ----
     let lungeActive = false;
-    if (input.lunge) {
+    const wasLunging = this.lungeTimer > 0;
+    if (this._filter > 0) this._filter = Math.max(0, this._filter - dt);
+    if (input.lunge && this._filter <= 0 && !this.forceClimb && this.mode === 'swim') {
       if (!this._wasCharging) this.lungeCharge = 0;
       this.lungeCharge = Math.min(1, this.lungeCharge + dt / 0.9);
       this._wasCharging = true;
@@ -179,12 +185,16 @@ export class PlayerController {
       if (this._wasCharging && this.lungeCharge > 0.25) {
         this.lungeTimer = 1.15;
         this.lungePower = this.lungeCharge;
+        this._emit('lunge', { power: this.lungePower });
       }
       this._wasCharging = false;
     }
     if (this.lungeTimer > 0) {
       this.lungeTimer -= dt;
       lungeActive = true;
+    } else if (wasLunging) {
+      this._filter = this.sp.filterTime;
+      if (this._filter > 0) this._emit('filter', { time: this._filter });
     }
 
     if (this.mode === 'air') {
@@ -229,12 +239,20 @@ export class PlayerController {
     if (this._runup) {
       targetSpeed = Math.max(cruise * 1.3, sp.vExitMax * 1.05);
       targetThrust = 2;
+    } else if (this.forceClimb) {
+      targetSpeed = cruise * 0.7;
+      targetThrust = 0.8;
     } else if (lungeActive) {
-      targetSpeed = cruise * (1.2 + TUNING.lungePower * 0.5);
+      // real engulfment: a short sprint to ~1.7x cruise, then the open mouth brakes hard
+      targetSpeed = cruise * 1.7;
       targetThrust = 1.4 + this.lungePower * 0.6;
     } else if (this._wasCharging) {
       targetSpeed = Math.min(targetSpeed, cruise * 0.4);
       targetThrust = 0.35;
+    }
+    if (this._filter > 0) {
+      targetSpeed *= 0.45;
+      targetThrust *= 0.5;
     }
     this.thrust += (targetThrust - this.thrust) * damp(targetThrust > this.thrust ? 3 : 1.5, dt);
 
@@ -253,7 +271,9 @@ export class PlayerController {
     const vertical = (input.ascend ? 1 : 0) - (input.descend ? 1 : 0);
     const desiredPitch = this._runup
       ? sp.breachClimb + vertical * 0.26 // auto-climb, +-15 deg trim
-      : THREE.MathUtils.clamp(this.aimPitch + vertical * 0.75, -1.2, 1.2);
+      : this.forceClimb
+        ? (this.atSurface ? 0 : 1.0) // head for air, then lie level to breathe
+        : THREE.MathUtils.clamp(this.aimPitch + vertical * 0.75, -1.2, 1.2);
     const maxTurn = TUNING.turnRate * sp.turnRate * 0.5 * (0.35 + 0.65 * Math.min(1, speedN + 0.2)) * control
       * (this._runup ? 1.4 : 1);
     const maxPitchTurn = this._runup ? maxTurn * 1.2 : maxTurn * 0.8;
@@ -301,6 +321,7 @@ export class PlayerController {
       this.position.y += (this.bounds.maxY - this.position.y) * damp(4, dt);
       if (this.velocity.y > 0) this.velocity.y = 0;
     }
+    this.atSurface = this.position.y >= this.bounds.maxY - 0.6;
     this._finishFrame(dt, input, cruise, maxTurn, lungeActive);
   }
 
@@ -333,6 +354,7 @@ export class PlayerController {
     st.time += dt;
     st.forward = input.forward ? 1 : 0;
     st.isLunging = lungeActive;
+    st.filtering = this._filter > 0;
     st.airborne = this.mode === 'air';
 
     this.whale.update(dt, st);
@@ -361,6 +383,7 @@ export class PlayerController {
     this.mode = 'air';
     this._runup = false;
     this.breachReady = false;
+    this.atSurface = false;
 
     // twist: species default; the mouse biases direction and adds up to 40%
     const tAir = Math.max(0.6, (2 * vy) / G);
