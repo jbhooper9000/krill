@@ -186,8 +186,113 @@ const scenarios = {
     await pinCamera(0.8, -0.6, 0.8, 3); await sleep(600); await shot('shots-looking-up');
     await evaljs(`krill.controller.position.y = -2; 1`);
     await pinCamera(1.2, 0.6, 1.2); await sleep(600); await shot('shots-near-surface');
-    await evaljs(`krill.controller.position.y = krill.controller.bounds.minY + 4; 1`);
+    await evaljs(`(() => { const p = krill.controller.position; p.y = krill.terrain.heightAt(p.x, p.z) + krill.controller.sp.length * 0.6; return 1; })()`);
     await pinCamera(1.4, 0.2, 0.6); await sleep(900); await shot('shots-deep');
+  },
+  // Monterey terrain: canyon wall, canyon view, shelf, far overview, a 5 km
+  // floating-origin round trip, heightAt sanity vs the chart, and perf counters.
+  async terrain() {
+    await evaljs(`krill.terrain.ready.then(() => 1)`);
+    await sleep(1500);
+    const info = (label) => evaljs(`(() => { const t = krill.terrain, c = krill.controller, p = c.position;
+      const r = t.regionAt(p.x, p.z); const ll = t.unproject(p.x + t.origin.x, p.z + t.origin.y);
+      return { label: ${JSON.stringify(label)}, scene: p.toArray().map(v => +v.toFixed(1)), origin: [t.origin.x, t.origin.y],
+        latlon: [+ll.lat.toFixed(4), +ll.lon.toFixed(4)], floor: +t.heightAt(p.x, p.z).toFixed(1), region: r && r.name,
+        chunks: t.stats.chunks, pending: t.stats.pending, tiles: t.stats.tiles, terrainTris: t.stats.triangles,
+        drawTris: krill.renderer.info.render.triangles, calls: krill.renderer.info.render.calls, rebases: t.stats.rebases }; })()`);
+    // teleport the whale to lat/lon (or scene x/z) at `above` metres over the floor, heading yaw
+    const teleport = (lat, lon, above, yaw = 0) => evaljs(`(() => { const t = krill.terrain, c = krill.controller;
+      const [X, Z] = t.project(${lat}, ${lon}); const x = X - t.origin.x, z = Z - t.origin.y;
+      c.position.set(x, Math.min(-4, t.heightAt(x, z) + ${above}), z); c.velocity.set(0, 0, 0); c.speed = 0;
+      c.yaw = c.aimYaw = c._aimYawTarget = ${yaw}; c.pitch = 0; c._updateCamera(0, true); return 1; })()`);
+    // clear-water debug view: freeze depth fog so macro shape is visible
+    const clearWater = (density, far, near = 0.1) => evaljs(`(() => { krill.world.setDepth = () => ({}); krill.scene.fog.density = ${density};
+      krill.camera.far = ${far}; krill.camera.near = ${near}; krill.camera.updateProjectionMatrix(); return 1; })()`);
+
+    console.log('sanity', JSON.stringify(await evaljs(`(() => { const t = krill.terrain; const pts = {
+      'Monterey Canyon axis 36.78N 122.025W': [36.78, -122.025], 'canyon axis 36.69N 122.10W': [36.69, -122.10],
+      'upper canyon 36.795N 121.86W': [36.795, -121.86], 'southern shelf 36.70N 121.88W': [36.70, -121.88],
+      'Santa Cruz shelf 36.90N 122.05W': [36.90, -122.05], 'Soquel Canyon 36.82N 121.97W': [36.82, -121.97],
+      'MARS 36.713N 122.187W': [36.7128, -122.1868] };
+      const o = {}; for (const [k, [la, lo]] of Object.entries(pts)) { const [X, Z] = t.project(la, lo);
+        const x = X - t.origin.x, z = Z - t.origin.y; const r = t.regionAt(x, z); o[k] = [+t.heightAt(x, z).toFixed(0), r && r.name]; }
+      return o; })()`)));
+    console.log(JSON.stringify(await info('start')));
+    await hideHud();
+
+    // perf: whole-frame triangles/draw calls, and fps with vs without the terrain
+    const frameInfo = () => evaljs(`new Promise(r => { const i = krill.renderer.info; i.autoReset = false;
+      requestAnimationFrame(() => { i.reset(); requestAnimationFrame(() => { const o = { tris: i.render.triangles, calls: i.render.calls };
+      i.autoReset = true; r(o); }); }); })`);
+    console.log('perf with terrain', JSON.stringify({ ...(await frameInfo()), fps: await fps(), stats: await evaljs(`krill.terrain.stats`) }));
+    await evaljs(`krill.terrain.setVisible(false); 1`);
+    console.log('perf without terrain', JSON.stringify({ ...(await frameInfo()), fps: await fps() }));
+    await evaljs(`krill.terrain.setVisible(true); 1`);
+
+    // 0. as the game currently lights it (depth fog + dim light are the lighting pass's job)
+    await key('keyDown', 'KeyW', 'w'); await sleep(2000); await key('keyUp', 'KeyW', 'w');
+    await shot('terrain-0-start-as-lit');
+
+    // 1. behind the whale on the canyon's upper wall (light held at a 30 m zone, fog thinned)
+    await evaljs(`krill.world.setDepth(30); 1`);
+    await clearWater(0.009, 500);
+    // low in the upper canyon, facing south up the wall toward the rim
+    await teleport(36.7968, -121.868, 22, Math.PI);
+    await sleep(2500);
+    console.log(JSON.stringify(await info('canyon-wall')));
+    await shot('terrain-1-canyon-wall');
+
+    // 2. looking down into the canyon from the rim (fog thinned for the shot)
+    await clearWater(0.0022, 6000);
+    // whale hangs at 60 m over the upper canyon axis, camera behind, looking west down-canyon
+    await teleport(36.7980, -121.872, 1000, Math.PI * 0.5);
+    await evaljs(`(() => { const c = krill.controller; c.position.y = -60; c._updateCamera = function () { const p = this.position;
+      this.camera.position.set(p.x + 50, p.y + 12, p.z); this.camera.lookAt(p.x - 500, p.y - 260, p.z); }; return 1; })()`);
+    await sleep(4000);
+    console.log(JSON.stringify(await info('canyon-down')));
+    await shot('terrain-2-canyon-down');
+
+    // 3. a shelf area (southern bay shelf, ~80 m)
+    await evaljs(`delete krill.controller._updateCamera; krill.scene.fog.density = 0.006; 1`);
+    await teleport(36.70, -121.88, 10, 0.6);
+    await key('keyDown', 'KeyW', 'w'); await sleep(2500); await key('keyUp', 'KeyW', 'w');
+    await sleep(1500);
+    console.log(JSON.stringify(await info('shelf')));
+    await shot('terrain-3-shelf');
+
+    // 4. rebase round trip: teleport 5 km east and back, check nothing drifts
+    const before = await evaljs(`(() => { const t = krill.terrain, p = krill.controller.position;
+      return { abs: [p.x + t.origin.x, p.z + t.origin.y], h: t.heightAt(p.x, p.z), origin: [t.origin.x, t.origin.y], k: krill.krill.krillClouds[0].homeCenter.x + t.origin.x }; })()`);
+    await evaljs(`(() => { const c = krill.controller; c.position.x += 5000; c._updateCamera(0, true); return 1; })()`);
+    await sleep(2500);
+    const away = await info('after +5 km');
+    console.log(JSON.stringify(away));
+    await evaljs(`(() => { const c = krill.controller; c.position.x -= 5000; c._updateCamera(0, true); return 1; })()`);
+    await sleep(3000);
+    const after = await evaljs(`(() => { const t = krill.terrain, p = krill.controller.position;
+      return { abs: [p.x + t.origin.x, p.z + t.origin.y], h: t.heightAt(p.x, p.z), origin: [t.origin.x, t.origin.y], scene: [p.x, p.z],
+        k: krill.krill.krillClouds[0].homeCenter.x + t.origin.x, rebases: t.stats.rebases }; })()`);
+    console.log('rebase', JSON.stringify({ before, after,
+      absDrift: Math.hypot(after.abs[0] - before.abs[0], after.abs[1] - before.abs[1]).toFixed(3),
+      heightDiff: (after.h - before.h).toFixed(3) }));
+    await shot('terrain-4-after-rebase');
+
+    // 5. far overview: camera high over the bay looking across the canyon
+    await clearWater(0, 200000, 20);
+    await evaljs(`(() => { krill.world.surface.visible = false; krill.world._rays.visible = false; krill.world.snow.visible = false; const t = krill.terrain, c = krill.controller;
+      const [X, Z] = t.project(36.66, -121.86); const [TX, TZ] = t.project(36.76, -122.06);
+      c.position.set(X - t.origin.x, -30, Z - t.origin.y); c._updateCamera = function () {
+        this.camera.position.set(this.position.x, 9000, this.position.z);
+        this.camera.lookAt(TX - t.origin.x, -900, TZ - t.origin.y); }; return 1; })()`);
+    await sleep(9000);
+    console.log(JSON.stringify(await info('overview')));
+    await shot('terrain-5-overview');
+    await evaljs(`(() => { const t = krill.terrain, c = krill.controller; const [X, Z] = t.project(36.75, -122.0);
+      c._updateCamera = function () { this.camera.position.set(X - t.origin.x, 40000, Z - t.origin.y + 1);
+        this.camera.lookAt(X - t.origin.x, 0, Z - t.origin.y); }; return 1; })()`);
+    await sleep(9000);
+    console.log(JSON.stringify(await info('top-down')));
+    await shot('terrain-6-topdown');
   },
 };
 
