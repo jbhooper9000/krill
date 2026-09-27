@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Flora } from './Flora.js';
 
 // Streamed, edgeless Monterey Bay seafloor.
 //
@@ -166,9 +167,13 @@ function makeDetailTexture() {
 }
 
 // ---- material --------------------------------------------------------------
-// MeshStandardMaterial with an onBeforeCompile patch: sand / mud / rock / land
-// colouring by slope + depth, and a procedural bump (sand ripples, rock grain).
-// Per-vertex aTerrain = (rockiness 0..1, depth m, wrapped x, wrapped z).
+// MeshStandardMaterial with an onBeforeCompile patch: sand / silt / mud / rock /
+// land colouring by slope, depth and sediment patches, and a procedural bump.
+// Underwater light is mostly diffuse, so the whale-scale cues are carried by
+// *albedo* as much as by normals: megaripple and ripple banding (troughs
+// collect darker shell hash and detritus), speckles, silt-vs-sand patches.
+// Per-vertex aTerrain = (rockiness 0..1, depth m, wrapped x, wrapped z) and
+// aSed = (silt 0..1, reef 0..1).
 function makeTerrainMaterial() {
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.93, metalness: 0 });
   const uniforms = { uDetail: { value: makeDetailTexture() } };
@@ -176,30 +181,47 @@ function makeTerrainMaterial() {
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec4 aTerrain;\nvarying vec4 vTerrain;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrain = aTerrain;');
+      .replace('#include <common>', '#include <common>\nattribute vec4 aTerrain;\nattribute vec2 aSed;\nvarying vec4 vTerrain;\nvarying vec2 vSed;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrain = aTerrain;\nvSed = aSed;');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', /* glsl */ `#include <common>
 varying vec4 vTerrain;
+varying vec2 vSed;
 uniform sampler2D uDetail;
 float tRockMask;
+// Everything sampled from P is periodic in ${WRAP}.0 m, so the per-chunk wrap
+// offsets are seamless: textures repeat at divisors of it and the wave
+// vectors below are integer multiples of 1/${WRAP}.
+// megaripples: ~6 m wavelength, asymmetric (steep lee face), 0..1 crest=1
+float tMega(vec2 P) {
+  float bend = texture2D(uDetail, P / 128.0).r * 5.0;
+  float ph = 6.2831853 * (P.x * (620.0 / ${WRAP}.0) - P.y * (260.0 / ${WRAP}.0)) + bend;
+  float f = fract(ph / 6.2831853);
+  return smoothstep(0.0, 0.75, f) * (1.0 - smoothstep(0.75, 1.0, f));
+}
+// current ripples: ~1.5 m wavelength
+float tRipple(vec2 P) {
+  float bend = texture2D(uDetail, P / 64.0).r * 6.0;
+  float ph = 6.2831853 * (P.x * (2600.0 / ${WRAP}.0) + P.y * (900.0 / ${WRAP}.0)) + bend;
+  return 0.5 + 0.5 * sin(ph + 1.3 * sin(ph * 0.5));
+}
+// sandy-bedform weight: less on silt, rock and deep mud
+float tBedform(float rock, float silt, float depth) {
+  return (1.0 - rock) * (1.0 - 0.75 * silt) * (1.0 - 0.8 * smoothstep(50.0, 250.0, depth));
+}
 float tBump(vec2 P, float rock, float depth, float fw) {
-  // everything here is periodic in ${WRAP}.0 m so chunk wrap offsets are seamless
   vec4 a = texture2D(uDetail, P / 16.0);
   vec4 b = texture2D(uDetail, P / 4.0);
   vec4 c = texture2D(uDetail, P / 1.0);
-  // sand ripples (~1.5 m wavelength), bent by low-frequency noise, fade with pixel footprint and depth
-  float bend = texture2D(uDetail, P / 64.0).r * 6.0;
-  float ph = 6.2831853 * (P.x * (2600.0 / ${WRAP}.0) + P.y * (900.0 / ${WRAP}.0)) + bend;
-  // ripples come in patches, mostly on the shallow shelf
-  float patchy = smoothstep(0.4, 0.65, texture2D(uDetail, P / 128.0).a);
-  float ripple = (0.5 + 0.5 * sin(ph + 1.3 * sin(ph * 0.5))) * 0.03 * patchy;
-  ripple *= (1.0 - smoothstep(0.05, 0.2, fw)) * (1.0 - smoothstep(40.0, 250.0, depth) * 0.85);
+  float bed = tBedform(rock, vSed.x, depth);
+  float patchy = smoothstep(0.35, 0.6, texture2D(uDetail, P / 128.0).a);
+  float ripple = tRipple(P) * 0.035 * patchy * (1.0 - smoothstep(0.05, 0.25, fw));
+  float mega = tMega(P) * 0.28 * (1.0 - smoothstep(0.5, 2.5, fw));
   float grain = (a.g * 0.6 + b.b * 0.35) * (1.0 - smoothstep(1.0, 4.0, fw))
               + c.b * 0.08 * (1.0 - smoothstep(0.1, 0.4, fw));
   float rockH = a.r * 0.9 + b.g * 0.45 * (1.0 - smoothstep(0.6, 2.0, fw));
   // bump only where it can be resolved; far away the geometry carries the shape
-  return mix(ripple + grain * 0.05, rockH, rock) * (1.0 - smoothstep(1.5, 6.0, fw));
+  return mix((ripple + mega) * bed + grain * 0.05, rockH, rock) * (1.0 - smoothstep(1.5, 6.0, fw));
 }
 vec3 tPerturb(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDir) {
   vec3 vSigmaX = dFdx(surf_pos);
@@ -214,23 +236,36 @@ vec3 tPerturb(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDir) {
 {
   vec2 P = vTerrain.zw;
   float depth = vTerrain.y;
+  float silt = vSed.x, reef = vSed.y;
   // texture variation fades out with pixel footprint so its tiling never shows
-  // from afar (large-scale variation is per-vertex, baked into vTerrain.x)
+  // from afar (large-scale variation is per-vertex: rockiness, silt, reef)
   float fwc = length(fwidth(P));
   float near = 1.0 - smoothstep(1.0, 6.0, fwc);
   float big = mix(0.5, texture2D(uDetail, P / 256.0).a, near);
   float mid = mix(0.5, texture2D(uDetail, P / 32.0).r, near);
   float fine = mix(0.5, texture2D(uDetail, P / 6.0).g, near);
   tRockMask = smoothstep(0.35, 0.7, vTerrain.x + (big - 0.5) * 0.4 + (mid - 0.5) * 0.25);
-  // sand: pale shelf sand -> grey-green silt/mud deeper in the canyon
-  vec3 sandShallow = vec3(0.62, 0.56, 0.45);
-  vec3 mud = vec3(0.45, 0.44, 0.37);
-  vec3 sand = mix(sandShallow, mud, smoothstep(60.0, 500.0, depth));
-  sand *= 0.82 + 0.3 * mid + 0.12 * (fine - 0.5);
+  // sediments: pale shelf sand, olive-grey silt patches, grey-green canyon mud
+  vec3 sandShallow = vec3(0.64, 0.57, 0.44);
+  vec3 siltCol = vec3(0.43, 0.42, 0.34);
+  vec3 mud = vec3(0.40, 0.40, 0.34);
+  vec3 sand = mix(sandShallow, siltCol, smoothstep(0.2, 0.8, silt + (mid - 0.5) * 0.3));
+  sand = mix(sand, mud, smoothstep(80.0, 600.0, depth));
+  sand *= 0.85 + 0.25 * mid + 0.12 * (fine - 0.5);
+  // bedform banding: troughs collect darker shell hash / detritus
+  float bed = tBedform(0.0, silt, depth);
+  float nearM = 1.0 - smoothstep(0.4, 2.5, fwc);
+  float nearR = 1.0 - smoothstep(0.06, 0.3, fwc);
+  float patchy = smoothstep(0.35, 0.6, texture2D(uDetail, P / 128.0).a);
+  sand *= 1.0 + ((tMega(P) - 0.5) * 0.30 * nearM + (tRipple(P) - 0.5) * 0.16 * nearR * patchy) * bed;
+  // speckles: shell fragments, pebbles, burrow mouths
+  float spk = texture2D(uDetail, P / 3.0).b;
+  sand *= 1.0 - smoothstep(0.72, 0.95, spk) * 0.35 * (1.0 - smoothstep(0.08, 0.5, fwc));
   vec3 rock = mix(vec3(0.24, 0.22, 0.20), vec3(0.14, 0.15, 0.15), big);
   rock *= 0.55 + 0.8 * fine;
-  // encrusting life on shallow rock (reds/greens), fading with depth
-  rock = mix(rock, rock * vec3(1.25, 0.85, 0.8), smoothstep(0.55, 0.9, mid) * (1.0 - smoothstep(30.0, 200.0, depth)));
+  // encrusting life on shallow rock (coralline pinks, sponges), strongest on reefs
+  float crust = smoothstep(0.5, 0.9, mid) * (1.0 - smoothstep(30.0, 200.0, depth)) * (0.5 + 0.5 * reef);
+  rock = mix(rock, rock * vec3(1.45, 0.9, 0.95), crust);
   vec3 col = mix(sand, rock, tRockMask);
   // dry land above the waterline
   col = mix(col, vec3(0.52, 0.49, 0.38) * (0.8 + 0.3 * mid), smoothstep(0.0, -2.0, depth));
@@ -246,7 +281,7 @@ vec3 tPerturb(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDir) {
   normal = tPerturb(-vViewPosition, normal, dB, faceDirection);
 }`);
   };
-  mat.customProgramCacheKey = () => 'krill-terrain-v1';
+  mat.customProgramCacheKey = () => 'krill-terrain-v2';
   return mat;
 }
 
@@ -300,6 +335,9 @@ export class Terrain {
     // materials for the underwater light model; Game passes it in here.
     if (this.options.patchMaterial) this.options.patchMaterial(this.material);
     // -------------------------------------------------------------------------------
+
+    // boulders / reef rock and kelp forests, streamed with the terrain
+    this.flora = new Flora(this, { patchMaterial: this.options.patchMaterial });
 
     const { index, ring } = makeChunkIndex();
     this._index = index;
@@ -401,6 +439,10 @@ export class Terrain {
   }
 
   _prepareRegions(json) {
+    this._reefZones = (json.reefs || []).map((r) => {
+      const [x, z] = this.project(r.center[0], r.center[1]);
+      return { name: r.name, x, z, r: r.radius, kelp: !!r.kelp };
+    });
     this.regions = json.regions.map((r) => {
       const o = { id: r.id, name: r.name, kind: r.kind, type: r.type, minDepth: r.minDepth, maxDepth: r.maxDepth };
       if (r.type === 'circle') { [o.cx, o.cz] = this.project(r.center[0], r.center[1]); o.r = r.radius; }
@@ -491,7 +533,8 @@ export class Terrain {
   // wavelength below ~2 vertex spacings are faded out for coarse chunks.
   _detail(X, Z, m, spacing) {
     const slope = Math.hypot(m.dx, m.dz);
-    const rock = smoothstep(0.2, 0.55, slope);
+    // rock on steep walls, and on reef patches (known rocky coasts + rare shelf outcrops)
+    const rock = Math.max(smoothstep(0.2, 0.55, slope), 0.85 * this.reefAt(X, Z, -m.h, spacing));
     const lim = spacing * 2;
     const oct = (lambda) => (spacing <= 0 ? 1 : smoothstep(lim, lim * 2, lambda));
     let d = 0;
@@ -520,6 +563,42 @@ export class Terrain {
       }
     }
     return d;
+  }
+
+  // Rocky reef weight 0..1 at absolute (X, Z) for water depth `depth`: patchy
+  // reef inside the hand-authored reef zones (Point Pinos, Point Lobos, Santa
+  // Cruz points ... in regions.json) shallower than ~60 m, plus rare low
+  // outcrops scattered on the open shelf.
+  reefAt(X, Z, depth, spacing = 0) {
+    if (depth < -1) return 0;
+    let r = 0;
+    const zw = this._zoneWeight(X, Z, false);
+    if (zw > 0) r = zw * smoothstep(-0.5, 0.05, gnoise(X / 90, Z / 90, 41)) * (1 - smoothstep(35, 65, depth));
+    if (depth > 12 && depth < 160 && spacing < 64) {
+      // two rotated octaves so the outcrops don't line up on the noise lattice
+      const n = gnoise(X / 230, Z / 230, 43) + 0.6 * gnoise((X * 0.8 + Z * 0.6) / 97, (Z * 0.8 - X * 0.6) / 97, 47);
+      r = Math.max(r, 0.8 * smoothstep(0.75, 0.95, n) * (1 - smoothstep(110, 160, depth)));
+    }
+    return r;
+  }
+
+  // Silt (vs clean sand) 0..1: large patches, more of it in deeper, quieter water.
+  siltAt(X, Z, depth, spacing = 0) {
+    // patches fade to their mean on coarse chunks (they'd alias into blocks)
+    const k = 1 - smoothstep(60, 130, spacing);
+    const p = 0.4 + (smoothstep(-0.35, 0.45, gnoise(X / 260, Z / 260, 45)) - 0.4) * k;
+    return Math.min(1, p * 0.8 + smoothstep(50, 140, depth) * 0.45);
+  }
+
+  // 0..1 inside the reef / kelp zones (soft edge over the outer half radius)
+  _zoneWeight(X, Z, kelpOnly) {
+    let w = 0;
+    for (const z of this._reefZones || []) {
+      if (kelpOnly && !z.kelp) continue;
+      const d = Math.hypot(X - z.x, Z - z.z);
+      if (d < z.r) w = Math.max(w, smoothstep(z.r, z.r * 0.5, d));
+    }
+    return w;
   }
 
   _heightAbs(X, Z, spacing) {
@@ -582,7 +661,11 @@ export class Terrain {
 
     const CX = cam.x + this.origin.x, CZ = cam.z + this.origin.y, CY = cam.y;
     // stream 30 m tiles around the camera (a few at a time) and drop far ones
-    if (this._frame % 10 === 0) {
+    // (time-based, and immediately after a jump, so slow frame rates still stream)
+    const nowMs = performance.now();
+    const jumped = !this._lastTileCheck || Math.hypot(CX - this._lastTileCheck.x, CZ - this._lastTileCheck.z) > 1000;
+    if (jumped || nowMs - (this._lastTileCheck ? this._lastTileCheck.t : 0) > 250) {
+      this._lastTileCheck = { x: CX, z: CZ, t: nowMs };
       const want = this._tilesNear(CX, CZ, this.options.tileRadius);
       want.sort((a, b) => this._tileDist(a, CX, CZ) - this._tileDist(b, CX, CZ));
       for (const k of want) if (this._tileLoads < 3 && !this._tiles.has(k)) this._loadTile(k);
@@ -635,6 +718,10 @@ export class Terrain {
     this.stats.pending = missing.length;
     this.stats.tiles = [...this._tiles.values()].filter((g) => g instanceof Grid).length;
     this.stats.triangles = this._chunks.size * this._index.count / 3;
+    if (this.loaded) {
+      this.flora.update(CX, CZ, CY);
+      this.stats.flora = this.flora.stats;
+    }
   }
 
   _tileDist(key, X, Z) {
@@ -688,6 +775,7 @@ export class Terrain {
     const pos = new Float32Array(nv * 3);
     const nor = new Float32Array(nv * 3);
     const ter = new Float32Array(nv * 4);
+    const sed = new Float32Array(nv * 2);
     const baseX = Math.floor(X0 / WRAP) * WRAP, baseZ = Math.floor(Z0 / WRAP) * WRAP;
     let minY = Infinity, maxY = -Infinity;
     for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
@@ -703,7 +791,11 @@ export class Terrain {
       const drawnSlope = Math.hypot(nx, nz);
       const rockBase = sp < 16 ? Math.max(rockG[v] * 0.85, smoothstep(0.45, 0.9, drawnSlope)) : smoothstep(0.25, 0.7, drawnSlope);
       // non-repeating large-scale patchiness (outcrops vs sediment drape)
-      ter[v * 4] = rockBase + 0.25 * gnoise((X0 + i * sp) / 380, (Z0 + j * sp) / 380, 21) * Math.min(1, rockBase * 3);
+      const VX = X0 + i * sp, VZ = Z0 + j * sp;
+      const reef = this.reefAt(VX, VZ, -h, sp);
+      ter[v * 4] = Math.max(reef, rockBase + 0.25 * gnoise(VX / 380, VZ / 380, 21) * Math.min(1, rockBase * 3));
+      sed[v * 2] = this.siltAt(VX, VZ, -h, sp);
+      sed[v * 2 + 1] = reef;
       ter[v * 4 + 1] = -h;
       ter[v * 4 + 2] = X0 + i * sp - baseX;
       ter[v * 4 + 3] = Z0 + j * sp - baseZ;
@@ -718,6 +810,7 @@ export class Terrain {
       pos[v * 3] = pos[s * 3]; pos[v * 3 + 1] = pos[s * 3 + 1] - skirt; pos[v * 3 + 2] = pos[s * 3 + 2];
       nor[v * 3] = nor[s * 3]; nor[v * 3 + 1] = nor[s * 3 + 1]; nor[v * 3 + 2] = nor[s * 3 + 2];
       for (let q = 0; q < 4; q++) ter[v * 4 + q] = ter[s * 4 + q];
+      sed[v * 2] = sed[s * 2]; sed[v * 2 + 1] = sed[s * 2 + 1];
     }
     minY -= skirt;
 
@@ -726,6 +819,7 @@ export class Terrain {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     geo.setAttribute('aTerrain', new THREE.BufferAttribute(ter, 4));
+    geo.setAttribute('aSed', new THREE.BufferAttribute(sed, 2));
     geo.boundingBox = new THREE.Box3(new THREE.Vector3(0, minY, 0), new THREE.Vector3(size, maxY, size));
     geo.boundingSphere = geo.boundingBox.getBoundingSphere(new THREE.Sphere());
 
@@ -753,6 +847,7 @@ export class Terrain {
   }
 
   dispose() {
+    this.flora.dispose();
     for (const [k, c] of this._chunks) this._disposeChunk(k, c);
     this.scene.remove(this.group);
     this.material.userData.terrainUniforms.uDetail.value.dispose();
