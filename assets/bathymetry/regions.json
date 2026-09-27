@@ -1,0 +1,598 @@
+{
+ "note": "Hand-authored regions / POIs for Monterey Bay, in WGS84 lat/lon (project with manifest.projection). Checked in order; the first match wins. circle: centre + radius (m). corridor: polyline + halfWidth (m), e.g. a canyon axis traced from the bathymetry (auto-traced deepest path on the corrected 2026-09-27 grids). polygon: ring of [lat, lon]. Optional minDepth/maxDepth (m, positive down) restrict a region to water of that depth at the query point. 'start' marks default spawn points.",
+ "regions": [
+  {
+   "id": "coast",
+   "name": "Coastline",
+   "kind": "land",
+   "type": "all",
+   "maxDepth": 0
+  },
+  {
+   "id": "moss-landing",
+   "name": "Monterey Canyon head",
+   "kind": "poi",
+   "type": "circle",
+   "center": [
+    36.8015,
+    -121.8
+   ],
+   "radius": 1500
+  },
+  {
+   "id": "mars",
+   "name": "MARS hydrophone",
+   "kind": "poi",
+   "type": "circle",
+   "center": [
+    36.7128,
+    -122.1868
+   ],
+   "radius": 900,
+   "note": "MBARI cabled observatory node, 891 m"
+  },
+  {
+   "id": "cannery-row",
+   "name": "Cannery Row kelp forest",
+   "kind": "poi",
+   "type": "circle",
+   "center": [
+    36.616,
+    -121.898
+   ],
+   "radius": 1100,
+   "maxDepth": 40
+  },
+  {
+   "id": "point-lobos",
+   "name": "Point Lobos kelp forest",
+   "kind": "poi",
+   "type": "circle",
+   "center": [
+    36.52,
+    -121.95
+   ],
+   "radius": 1500,
+   "maxDepth": 40
+  },
+  {
+   "id": "point-pinos",
+   "name": "Point Pinos reef",
+   "kind": "poi",
+   "type": "circle",
+   "center": [
+    36.638,
+    -121.938
+   ],
+   "radius": 1600,
+   "maxDepth": 60
+  },
+  {
+   "id": "davidson",
+   "name": "Davidson Seamount",
+   "kind": "poi",
+   "type": "circle",
+   "center": [
+    35.72,
+    -122.72
+   ],
+   "radius": 14000
+  },
+  {
+   "id": "ano-nuevo",
+   "name": "Año Nuevo upwelling plume",
+   "kind": "poi",
+   "type": "circle",
+   "center": [
+    37.09,
+    -122.34
+   ],
+   "radius": 9000
+  },
+  {
+   "id": "monterey-canyon",
+   "name": "Monterey Canyon",
+   "kind": "canyon",
+   "type": "corridor",
+   "halfWidth": 2200,
+   "path": [
+    [
+     36.803,
+     -121.795
+    ],
+    [
+     36.8025,
+     -121.808
+    ],
+    [
+     36.7929,
+     -121.8241
+    ],
+    [
+     36.7927,
+     -121.8435
+    ],
+    [
+     36.7985,
+     -121.862
+    ],
+    [
+     36.7942,
+     -121.8809
+    ],
+    [
+     36.798,
+     -121.9005
+    ],
+    [
+     36.788,
+     -121.9161
+    ],
+    [
+     36.7821,
+     -121.9348
+    ],
+    [
+     36.7806,
+     -121.9549
+    ],
+    [
+     36.7676,
+     -121.9669
+    ],
+    [
+     36.7621,
+     -121.9844
+    ],
+    [
+     36.774,
+     -121.998
+    ],
+    [
+     36.781,
+     -122.0156
+    ],
+    [
+     36.7787,
+     -122.0334
+    ],
+    [
+     36.7643,
+     -122.0394
+    ],
+    [
+     36.7501,
+     -122.0296
+    ],
+    [
+     36.7369,
+     -122.0183
+    ],
+    [
+     36.721,
+     -122.0148
+    ],
+    [
+     36.7056,
+     -122.0183
+    ],
+    [
+     36.696,
+     -122.0337
+    ],
+    [
+     36.6939,
+     -122.0537
+    ],
+    [
+     36.6971,
+     -122.0735
+    ],
+    [
+     36.6997,
+     -122.0934
+    ],
+    [
+     36.6917,
+     -122.1094
+    ],
+    [
+     36.6756,
+     -122.1073
+    ],
+    [
+     36.66,
+     -122.1126
+    ],
+    [
+     36.6444,
+     -122.1181
+    ],
+    [
+     36.6242,
+     -122.1493
+    ],
+    [
+     36.5952,
+     -122.162
+    ],
+    [
+     36.5689,
+     -122.1829
+    ],
+    [
+     36.5546,
+     -122.2394
+    ],
+    [
+     36.5631,
+     -122.2781
+    ],
+    [
+     36.5863,
+     -122.3061
+    ],
+    [
+     36.6069,
+     -122.3372
+    ],
+    [
+     36.6181,
+     -122.3738
+    ],
+    [
+     36.6123,
+     -122.4337
+    ],
+    [
+     36.5967,
+     -122.4907
+    ],
+    [
+     36.5729,
+     -122.5432
+    ],
+    [
+     36.5577,
+     -122.5965
+    ],
+    [
+     36.5,
+     -122.8
+    ]
+   ]
+  },
+  {
+   "id": "soquel-canyon",
+   "name": "Soquel Canyon",
+   "kind": "canyon",
+   "type": "corridor",
+   "halfWidth": 1500,
+   "path": [
+    [
+     36.85,
+     -121.968
+    ],
+    [
+     36.845,
+     -121.97
+    ],
+    [
+     36.8351,
+     -121.9698
+    ],
+    [
+     36.8259,
+     -121.9767
+    ],
+    [
+     36.8208,
+     -121.9883
+    ],
+    [
+     36.8112,
+     -121.9928
+    ],
+    [
+     36.8006,
+     -121.9956
+    ],
+    [
+     36.7903,
+     -121.9992
+    ]
+   ]
+  },
+  {
+   "id": "carmel-canyon",
+   "name": "Carmel Canyon",
+   "kind": "canyon",
+   "type": "corridor",
+   "halfWidth": 1800,
+   "path": [
+    [
+     36.545,
+     -121.945
+    ],
+    [
+     36.5472,
+     -121.9602
+    ],
+    [
+     36.5371,
+     -121.9695
+    ],
+    [
+     36.5323,
+     -121.984
+    ],
+    [
+     36.5353,
+     -121.9991
+    ],
+    [
+     36.5466,
+     -122.0061
+    ],
+    [
+     36.5592,
+     -122.0317
+    ],
+    [
+     36.5789,
+     -122.0502
+    ],
+    [
+     36.603,
+     -122.0532
+    ],
+    [
+     36.6258,
+     -122.0656
+    ],
+    [
+     36.6489,
+     -122.0774
+    ],
+    [
+     36.66,
+     -122.09
+    ]
+   ]
+  },
+  {
+   "id": "santa-cruz-shelf",
+   "name": "Santa Cruz shelf",
+   "kind": "shelf",
+   "type": "polygon",
+   "maxDepth": 160,
+   "ring": [
+    [
+     37.15,
+     -122.6
+    ],
+    [
+     37.15,
+     -121.85
+    ],
+    [
+     36.86,
+     -121.79
+    ],
+    [
+     36.815,
+     -121.9
+    ],
+    [
+     36.825,
+     -122.05
+    ],
+    [
+     36.87,
+     -122.3
+    ],
+    [
+     36.93,
+     -122.6
+    ]
+   ]
+  },
+  {
+   "id": "southern-shelf",
+   "name": "Southern Monterey Bay shelf",
+   "kind": "shelf",
+   "type": "polygon",
+   "maxDepth": 160,
+   "ring": [
+    [
+     36.79,
+     -121.77
+    ],
+    [
+     36.78,
+     -121.95
+    ],
+    [
+     36.73,
+     -121.98
+    ],
+    [
+     36.66,
+     -121.97
+    ],
+    [
+     36.6,
+     -121.88
+    ],
+    [
+     36.6,
+     -121.77
+    ]
+   ]
+  },
+  {
+   "id": "big-sur-slope",
+   "name": "Big Sur slope",
+   "kind": "slope",
+   "type": "polygon",
+   "ring": [
+    [
+     36.55,
+     -121.9
+    ],
+    [
+     36.55,
+     -122.2
+    ],
+    [
+     35.6,
+     -122.2
+    ],
+    [
+     35.6,
+     -121.2
+    ]
+   ]
+  },
+  {
+   "id": "outer-bay",
+   "name": "Outer Monterey Bay",
+   "kind": "open",
+   "type": "polygon",
+   "ring": [
+    [
+     37.06,
+     -122.56
+    ],
+    [
+     37.06,
+     -121.77
+    ],
+    [
+     36.44,
+     -121.77
+    ],
+    [
+     36.44,
+     -122.56
+    ]
+   ]
+  },
+  {
+   "id": "open-pacific",
+   "name": "Open Pacific",
+   "kind": "open",
+   "type": "all"
+  }
+ ],
+ "start": {
+  "default": {
+   "name": "Monterey Canyon rim",
+   "lat": 36.7855,
+   "lon": -121.847,
+   "note": "southern rim of the upper Monterey Canyon in ~110 m of water; the wall drops to ~270 m within 600 m to the north. Humpbacks feed along these edges."
+  }
+ },
+ "reefsNote": "Rocky reef zones (and whether giant kelp, Macrocystis pyrifera, grows there in 3-30 m). Used for reef rock on the floor, boulders and streamed kelp forests.",
+ "reefs": [
+  {
+   "name": "Cannery Row",
+   "center": [
+    36.618,
+    -121.899
+   ],
+   "radius": 1300,
+   "kelp": true
+  },
+  {
+   "name": "Lovers Point, Pacific Grove",
+   "center": [
+    36.626,
+    -121.915
+   ],
+   "radius": 1500,
+   "kelp": true
+  },
+  {
+   "name": "Point Pinos",
+   "center": [
+    36.638,
+    -121.936
+   ],
+   "radius": 1700,
+   "kelp": true
+  },
+  {
+   "name": "Asilomar",
+   "center": [
+    36.618,
+    -121.945
+   ],
+   "radius": 1500,
+   "kelp": true
+  },
+  {
+   "name": "Cypress Point",
+   "center": [
+    36.58,
+    -121.976
+   ],
+   "radius": 1400,
+   "kelp": true
+  },
+  {
+   "name": "Stillwater Cove, Carmel Bay",
+   "center": [
+    36.564,
+    -121.945
+   ],
+   "radius": 1300,
+   "kelp": true
+  },
+  {
+   "name": "Point Lobos",
+   "center": [
+    36.52,
+    -121.95
+   ],
+   "radius": 2000,
+   "kelp": true
+  },
+  {
+   "name": "Soquel Point, Capitola",
+   "center": [
+    36.953,
+    -121.966
+   ],
+   "radius": 1500,
+   "kelp": true
+  },
+  {
+   "name": "Lighthouse Point, Santa Cruz",
+   "center": [
+    36.95,
+    -122.026
+   ],
+   "radius": 1300,
+   "kelp": true
+  },
+  {
+   "name": "Natural Bridges",
+   "center": [
+    36.95,
+    -122.06
+   ],
+   "radius": 1400,
+   "kelp": true
+  },
+  {
+   "name": "Davenport reefs",
+   "center": [
+    37.01,
+    -122.195
+   ],
+   "radius": 2500,
+   "kelp": false
+  }
+ ]
+}

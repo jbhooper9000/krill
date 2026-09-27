@@ -1,0 +1,115 @@
+{
+  "name": "Monterey Bay",
+  "version": 1,
+  "generated": "2026-09-27",
+  "generator": "tools/bathymetry/build.mjs",
+  "source": {
+    "name": "NOAA NCEI DEM Global Mosaic (ArcGIS ImageServer exportImage)",
+    "service": "https://gis.ngdc.noaa.gov/arcgis/rest/services/DEM_mosaics/DEM_global_mosaic/ImageServer/exportImage",
+    "components": "Best-available NCEI DEMs mosaicked by NCEI: CUDEM 1/9 arc-second (nearshore), Monterey CA 1/3 arc-second coastal DEM, Southern California Coastal Relief Model 1 and 3 arc-second, ETOPO 2022 15 arc-second (offshore).",
+    "attribution": "Bathymetry: NOAA National Centers for Environmental Information (NCEI), DEM Global Mosaic. Public domain (US Government work).",
+    "license": "Public domain (U.S. Government work); please credit NOAA NCEI."
+  },
+  "projection": {
+    "type": "equirectangular",
+    "lat0": 36.75,
+    "lon0": -122.165,
+    "earthRadius": 6371008.8,
+    "metresPerDegLat": 111195.0802,
+    "metresPerDegLon": 89095.482,
+    "axes": "x = east metres, z = south metres (north is -z), y = up metres (0 = sea level)",
+    "formula": "x = (lon - lon0) * metresPerDegLon; z = -(lat - lat0) * metresPerDegLat"
+  },
+  "sample": {
+    "format": "int16le",
+    "compression": "gzip",
+    "heightScale": 0.25,
+    "layout": "row-major; rows north->south (+z), columns west->east (+x); first sample at (xMin, zMin)"
+  },
+  "levels": {
+    "L0": {
+      "res": 30,
+      "tileCells": 256,
+      "tileSamples": 257,
+      "tilesX": 9,
+      "tilesZ": 9,
+      "xMin": -34560,
+      "zMin": -34560,
+      "size": 69120,
+      "path": "tiles/L0_{ix}_{iz}.i16.gz",
+      "bbox": {
+        "west": -122.552898,
+        "east": -121.777102,
+        "north": 37.060805,
+        "south": 36.439195
+      },
+      "minHeight": -3086.9,
+      "maxHeight": 962.6
+    },
+    "bay": {
+      "res": 120,
+      "samples": 577,
+      "xMin": -34560,
+      "zMin": -34560,
+      "size": 69120,
+      "path": "bay_120m.i16.gz",
+      "bbox": {
+        "west": -122.552898,
+        "east": -121.777102,
+        "north": 37.060805,
+        "south": 36.439195
+      },
+      "min": -3086.4,
+      "max": 947.3
+    },
+    "region": {
+      "res": 500,
+      "samples": 513,
+      "xMin": -128000,
+      "zMin": -128000,
+      "size": 256000,
+      "path": "region_500m.i16.gz",
+      "bbox": {
+        "west": -123.601661,
+        "east": -120.728339,
+        "north": 37.90113,
+        "south": 35.59887
+      },
+      "min": -3893.8,
+      "max": 1708.9
+    }
+  },
+  "maps": {
+    "bay": {
+      "image": "map_bay.png",
+      "width": 512,
+      "height": 512,
+      "xMin": -34560,
+      "zMin": -34560,
+      "size": 69120,
+      "toPixel": "px = (x - xMin) / size * width; py = (z - zMin) / size * height",
+      "bbox": {
+        "west": -122.552898,
+        "east": -121.777102,
+        "north": 37.060805,
+        "south": 36.439195
+      }
+    },
+    "region": {
+      "image": "map_region.png",
+      "width": 512,
+      "height": 512,
+      "xMin": -128000,
+      "zMin": -128000,
+      "size": 256000,
+      "toPixel": "px = (x - xMin) / size * width; py = (z - zMin) / size * height",
+      "bbox": {
+        "west": -123.601661,
+        "east": -120.728339,
+        "north": 37.90113,
+        "south": 35.59887
+      }
+    }
+  },
+  "regions": "regions.json"
+}

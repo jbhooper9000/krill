@@ -79,6 +79,7 @@ export class Input {
       ascend: this.key('Space'),
       descend: this.key('ShiftLeft') || this.key('ShiftRight') || this.key('ControlLeft') || this.key('ControlRight'),
       lunge: this.buttons.right,
+      breach: this.key('KeyF'),
     };
     this._lookX = 0;
     this._lookY = 0;
