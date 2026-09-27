@@ -349,6 +349,11 @@ export class PlayerController {
       this.position.y += (minY - this.position.y) * damp(10, dt);
       if (this.position.y < hard) this.position.y = hard;
       if (this.velocity.y < 0) this.velocity.y = 0;
+    } else if (!this._runup && !input.forward && !input.descend && !this.forceClimb
+      && this.position.y > this.bounds.maxY - 1.5 && this.position.y <= this.bounds.maxY) {
+      // idle at the surface: whales loll (log) with the blowhole clear
+      this.position.y += (this.bounds.maxY - this.position.y) * damp(1.5, dt);
+      this.velocity.y *= Math.exp(-dt * 3);
     } else if (this.position.y > this.bounds.maxY && !this._runup) {
       this.position.y += (this.bounds.maxY - this.position.y) * damp(4, dt);
       if (this.velocity.y > 0) this.velocity.y = 0;

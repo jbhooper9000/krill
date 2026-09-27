@@ -104,6 +104,8 @@ export class Game {
     this.clock = new Clock(9);
     this.phys = new Physiology(sp);
     this._dayTime = 0; // game seconds into today's session
+    this._lungeLeft = 0;
+    this._dayOverPrompted = false;
     this.day = 1;
 
     this.krill = new KrillManager(this.scene, bounds, this.terrain);
@@ -220,6 +222,7 @@ export class Game {
       this.ui.prompt(data.reason);
     } else if (type === 'lunge') {
       this.phys.lungeStarted();
+      this._lungeLeft = Math.round(this.whale.sp.lungeKrill * (0.4 + 0.6 * data.power));
     } else if (type === 'breach-abort') {
       this.surge *= 0.8;
       this.ui.prompt('Breach aborted');
@@ -250,6 +253,15 @@ export class Game {
     const dayOver = this._dayTime * TUNING.timeCompression >= 24 * 3600;
     const starved = phys.condition <= 0;
     if (!dayOver && !starved) return;
+    // never cut a dive or a breach short: the day ends at the next breath
+    const c = this.controller;
+    if (!starved && !(c.atSurface && c.mode === 'swim' && !phys.blackout)) {
+      if (!this._dayOverPrompted) {
+        this._dayOverPrompted = true;
+        this.ui.prompt('The day is done \u2014 surface to rest');
+      }
+      return;
+    }
     const reached = phys.condition >= phys.target;
     const outcome = starved
       ? 'Too weak to go on — the season ends here'
@@ -274,6 +286,7 @@ export class Game {
   _nextDay() {
     this.day++;
     this._dayTime = 0;
+    this._dayOverPrompted = false;
     this.phys.stats = { kg: 0, dives: 0, lunges: 0, breaches: 0, blackouts: 0, bestLunge: 0 };
     this.paused = false;
     this.ui.setPaused(false);
@@ -341,9 +354,13 @@ export class Game {
       this._dayTime += dt;
       this.world.setTimeOfDay?.(this.clock.hours);
 
-      const room = Math.floor((1 - this.phys.stomach) * this.whale.sp.stomachKrill);
+      // whales feed by lunging: the mouth is shut while cruising, and each
+      // lunge engulfs a limited volume (capacity scales with lunge charge)
+      const stomachRoom = Math.floor((1 - this.phys.stomach) * this.whale.sp.stomachKrill);
+      const room = this.controller.state.isLunging ? Math.min(stomachRoom, this._lungeLeft) : 0;
       const eaten = this.krill.update(dt, this._elapsed, this.whale, this.controller, true, { krillY: this._krillY(), room });
       if (eaten > 0) {
+        this._lungeLeft = Math.max(0, this._lungeLeft - eaten);
         this.phys.swallow(eaten, this.controller.state.isLunging);
         this.ui.addKrill(this.krill.totalEaten);
       }

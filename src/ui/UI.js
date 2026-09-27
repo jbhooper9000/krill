@@ -623,6 +623,10 @@ export class UI {
     // everything else waits until the player has learned to swim
     if (!this._hintsDone.has('swim') || this._hint === 'swim') return;
 
+    // the depth lesson is learned once you're in the layer (or leave the water)
+    if (this._hint === 'food' && game._krillY
+      && (c.mode === 'air' || Math.abs(game.depth + game._krillY()) < 10)) this._doneHint('food');
+
     // (b) food: on the first dive, where the krill layer is right now
     if (!this._hintsDone.has('food') && (game.depth > 10 || this._runTime > 25) && game._krillY) {
       const layer = Math.round(-game._krillY() / 5) * 5;
@@ -676,6 +680,7 @@ export class UI {
     const el = $('prey-cue');
     const phys = game.phys;
     const near = this.preyCue && !game.paused && phys && !phys.blackout && c.mode === 'swim'
+      && !$('hud').classList.contains('hidden')
       && phys.stomach < 0.35 && this._nearestPatch(game, c);
     if (!near || near.dist < 35 || near.dist > 900) {
       el.classList.remove('on');

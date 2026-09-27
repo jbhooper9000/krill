@@ -6,7 +6,7 @@ export const SPECIES = {
     id: 'humpback',
     // Breach (design doc s5): surge cost in krill, run-up climb angle, max exit
     // speed (m/s), twist default/max (rad). Humpbacks are the acrobats.
-    breachKrill: 150,
+    breachKrill: 300, // ~3-4 good lunges
     breachClimb: 1.31, // 75 deg
     vExitMax: 9.5,
     breachAccel: 1.6, // m/s^2 during the run-up
@@ -25,10 +25,11 @@ export const SPECIES = {
     // Physiology (design doc s4.1/4.2); budgets in game seconds (~4x real)
     o2Budget: 120,
     lungeO2: 0.08,
+    lungeKrill: 70, // engulfment capacity per full lunge (boids)
     stomachKrill: 420,
     conditionPerKrill: 0.02,
     krillKg: 2,
-    metabolism: 0.012, // Condition points per second
+    metabolism: 0.006, // Condition points per second (~14/day)
     startCondition: 40,
     conditionTarget: 80,
     filterTime: 3.5, // s of filtering after each lunge (rorquals)
@@ -39,7 +40,7 @@ export const SPECIES = {
   blue: {
     id: 'blue',
     // blues rarely breach, and only partially
-    breachKrill: 260,
+    breachKrill: 600,
     breachClimb: 1.05, // 60 deg
     vExitMax: 7.0,
     breachAccel: 0.9, // m/s^2 during the run-up
@@ -54,10 +55,11 @@ export const SPECIES = {
     mouthRadius: 1.5,
     o2Budget: 150,
     lungeO2: 0.06,
+    lungeKrill: 160, // engulfment capacity per full lunge (boids)
     stomachKrill: 800,
     conditionPerKrill: 0.012,
     krillKg: 2,
-    metabolism: 0.014,
+    metabolism: 0.007,
     startCondition: 40,
     conditionTarget: 80,
     filterTime: 4,
@@ -66,7 +68,7 @@ export const SPECIES = {
   },
   sperm: {
     id: 'sperm',
-    breachKrill: 200, // design doc: 4 squid once squid exist
+    breachKrill: 250, // design doc: 4 squid once squid exist
     breachClimb: 1.4, // 80 deg
     vExitMax: 9.0,
     breachAccel: 1.5, // m/s^2 during the run-up
@@ -81,10 +83,11 @@ export const SPECIES = {
     mouthRadius: 1.05,
     o2Budget: 360,
     lungeO2: 0.07,
+    lungeKrill: 40, // engulfment capacity per full lunge (boids)
     stomachKrill: 350,
     conditionPerKrill: 0.018,
     krillKg: 2,
-    metabolism: 0.01,
+    metabolism: 0.005,
     startCondition: 40,
     conditionTarget: 80,
     filterTime: 0, // sperm whales suck prey in; no baleen filtering
