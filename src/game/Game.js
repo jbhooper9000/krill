@@ -206,6 +206,7 @@ export class Game {
   }
 
   _onWhaleEvent(type, data) {
+    this.audio?.event(type, data); // [audio] sound for whale events (src/game/Audio.js)
     const size = this.whale.sp.length * this.whale.group.scale.x;
     if (type === 'breach') {
       const cost = this._breachCost();
@@ -282,6 +283,7 @@ export class Game {
           : 'Underweight — migration odds poor';
     this.paused = true;
     if (document.exitPointerLock) document.exitPointerLock();
+    this.audio?.event('daycard', { reached, final: starved }); // [audio] day card chime
     this.ui.showDayCard?.({
       day: this.day,
       species: this.whale.sp.name,
@@ -312,6 +314,7 @@ export class Game {
       exertion: c.thrust,
       deepBreath: c.atSurface && input.ascend,
     });
+    if (ev) this.audio?.event(ev, { deep: c.atSurface && input.ascend }); // [audio] blow, blackout, ...
     if (ev === 'blow') {
       this.splash.blow(c.position, c.forwardDir, this.whale.sp.length * this.whale.group.scale.x, this.whale.sp.blow);
       this.ui.blow();
@@ -407,6 +410,7 @@ export class Game {
     }
     this.terrain.update(this.camera);
     if (this.running) this._updateRegion(rawDt);
+    this.audio?.update(rawDt, this); // [audio] per-frame mix, beds, strokes, heartbeat
 
     this.effects.render(dt);
   }

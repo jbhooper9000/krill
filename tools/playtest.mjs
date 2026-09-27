@@ -12,7 +12,10 @@
 //            narrow-window shot), hud (HUD states over bright + dark water,
 //            breach ready, denial, O2 veil), pause (pause screen),
 //            tune (tuning panel), onboard (first-time hints + prey cue),
-//            daycard (end-of-day card)
+//            daycard (end-of-day card), audio (unlock the procedural sound,
+//            offline-render every recipe, then log live levels/spectra through
+//            swim, lunge, low O2, blackout, blows, breach, night life, mute),
+//            noaudio (no AudioContext at all: must run without errors)
 // Headless Chrome renders with SwiftShader (software), so expect ~5-10 fps —
 // game time (dt clamped to 0.05) runs slower than wall time.
 import { spawn } from 'node:child_process';
@@ -68,6 +71,12 @@ async function evaljs(expr) {
   if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
   return r.result.value;
 }
+// like evaljs, but counts as a user gesture (browser autoplay rules)
+async function evalGesture(expr) {
+  const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true, userGesture: true });
+  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
+  return r.result.value;
+}
 async function shot(name) {
   const r = await send('Page.captureScreenshot', { format: 'png' });
   const file = path.join(out, `${species}-${name}.png`);
@@ -100,7 +109,127 @@ const hudState = () => evaljs(`(() => { const o = {}; for (const el of document.
 const hideHud = () => evaljs(`document.getElementById('hud').style.display='none'; 1`);
 
 const noAutostart = new Set(['menu']);
+// scripts injected before the page loads, per scenario
+const preload = {
+  noaudio: 'delete window.AudioContext; delete window.webkitAudioContext; delete window.OfflineAudioContext; delete window.webkitOfflineAudioContext;',
+};
+const errorsOnPage = () => evaljs(`document.getElementById('error-screen').classList.contains('hidden') ? null : document.getElementById('error-message').textContent`);
 const scenarios = {
+  // The harness can't hear: prove the sound layer structurally. (1) every
+  // recipe rendered offline has a sensible level, length and spectrum; (2) the
+  // live mix reacts to each game event (master RMS / spectral centroid log).
+  async audio() {
+    const A = 'krill.audio';
+    console.log('unlock', await evalGesture(`${A}.unlock() && (${A}.setMuted(false), ${A}.setVolume(0.8), true)`));
+    await sleep(800);
+    console.log('debug', JSON.stringify(await evaljs(`${A}.debug()`)));
+    const renders = await evaljs(`${A}.renderAll()`);
+    console.log('--- offline renders (peak/RMS dBFS, onset s, active s = within 30 dB of max, centroid Hz, share < 120 Hz) ---');
+    for (const r of renders) console.log('render', JSON.stringify(r));
+    console.log('benchmark (full graph offline)', JSON.stringify(await evaljs(`${A}.constructor.benchmark()`)));
+    await evaljs(`${A}.startLog(100)`);
+    const mark = (label) => evaljs(`${A}._note('@' + ${JSON.stringify(label)}); 1`);
+    const phase = async (label, ms) => { await mark(label); await sleep(ms); };
+    await phase('idle', 2500);
+    await key('keyDown', 'KeyW', 'w');
+    await phase('swim', 4000);
+    await mark('turn');
+    await drag(-320, 0, 25);
+    await sleep(1500);
+    await mark('lunge');
+    await mouse('mousePressed', 640, 360, 'right'); await sleep(1000); await mouse('mouseReleased', 640, 360, 'right');
+    await sleep(5000);
+    await key('keyUp', 'KeyW', 'w');
+    // low O2 at depth: heartbeat, then blackout -> forced ascent -> blows at the surface
+    await evaljs(`(() => { const c = krill.controller; c.position.set(0, -20, 0); krill.phys.o2 = 0.2; return 1; })()`);
+    await phase('lowO2', 5000);
+    await evaljs(`krill.phys.o2 = 0.01; 1`);
+    await mark('blackout');
+    for (let n = 0; n < 50; n++) {
+      await sleep(500);
+      const s = await evaljs(`({ y: +krill.controller.position.y.toFixed(1), o2: +krill.phys.o2.toFixed(2), blackout: krill.phys.blackout, uw: krill.world.isCameraUnderwater })`);
+      if (n % 4 === 0) console.log('breathe', JSON.stringify(s));
+      if (!s.blackout && s.o2 > 0.5) break;
+    }
+    await phase('surface', 3000);
+    // breach (surge full, 1.9 L deep)
+    await evaljs(`(() => { krill.surge = 1; const c = krill.controller; c.position.set(0, -1.9 * c.sp.length, 0); krill.phys.o2 = 1; return 1; })()`);
+    await key('keyDown', 'KeyW', 'w');
+    await sleep(500);
+    await mark('breach');
+    await key('keyDown', 'KeyF', 'f');
+    let landed = false, air = false;
+    for (let n = 0; n < 80 && !landed; n++) {
+      await sleep(300);
+      const m = await evaljs(`krill.controller.mode`);
+      if (m === 'air') air = true;
+      if (air && m === 'swim') landed = true;
+    }
+    await key('keyUp', 'KeyF', 'f');
+    await key('keyUp', 'KeyW', 'w');
+    await phase('landed', 4000);
+    // night: song, blue-whale calls and a ship forced now instead of waiting minutes
+    await evaljs(`(() => { const c = krill.controller; c.position.set(0, -25, 0); krill.clock.hours = 23; krill.world.setTimeOfDay(23); return 1; })()`);
+    await sleep(600);
+    await evaljs(`${A}._s.songT = 0; 1`);
+    await phase('night-song', 7000);
+    await evaljs(`${A}._s.blueT = 0; ${A}._s.songT = 99; 1`);
+    await phase('blue-call', 8000);
+    await evaljs(`${A}._s.shipT = 0; 1`);
+    await phase('ship', 8000);
+    // shallow reef at night: surf, snapping shrimp and the midshipman hum come up
+    await evaljs(`(() => { krill._hAt = krill.terrain.heightAt; krill.terrain.heightAt = () => -12;
+      const c = krill.controller; c.position.set(0, -8, 0); return 1; })()`);
+    await sleep(2500);
+    console.log('shallow-night loops', JSON.stringify((await evaljs(`${A}.debug()`)).loopGains));
+    await evaljs(`krill.terrain.heightAt = krill._hAt; 1`);
+    // pause (world ducks + muffles), then mute (context suspends)
+    await keyTap('Escape', 'Escape');
+    await phase('paused', 1500);
+    await evalGesture(`${A}.setMuted(true); 1`);
+    await sleep(800);
+    const muted = await evaljs(`${A}.debug()`);
+    await evalGesture(`${A}.setMuted(false); 1`);
+    await sleep(800);
+    const unmuted = await evaljs(`${A}.debug()`);
+    console.log('mute', JSON.stringify({ muted: muted.state, unmuted: unmuted.state, gain: await evaljs(`+${A}.master.gain.value.toFixed(3)`) }));
+    const log = await evaljs(`${A}.stopLog()`);
+    fs.writeFileSync(path.join(out, `${species}-audio-log.json`), JSON.stringify(log));
+    // summary: per marked phase, the master level and centroid and the events that fired
+    console.log('--- live log (samples every 100 ms), per phase ---');
+    let phaseName = 'start';
+    const rows = {};
+    for (const s of log) {
+      for (const e of s.ev) if (e.startsWith('@')) phaseName = e.slice(1);
+      const r = (rows[phaseName] ||= { n: 0, rms: [], cen: [], water: [], air: [], body: [], v: 0, ev: {} });
+      r.n++; r.rms.push(s.rms); r.cen.push(s.cen); r.water.push(s.water); r.air.push(s.air); r.body.push(s.body);
+      r.v = Math.max(r.v, s.v);
+      for (const e of s.ev) if (!e.startsWith('@')) r.ev[e] = (r.ev[e] || 0) + 1;
+    }
+    const med = (a) => { const b = a.filter((v) => v > -150).sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : -180; };
+    const max = (a) => Math.max(...a);
+    for (const [k, r] of Object.entries(rows)) {
+      console.log('phase', k.padEnd(11), JSON.stringify({ samples: r.n, rmsMed: med(r.rms), rmsMax: max(r.rms), centroidMed: med(r.cen),
+        waterMax: max(r.water), airMax: max(r.air), bodyMax: max(r.body), maxOneShots: r.v, events: r.ev }));
+    }
+    console.log('debug', JSON.stringify(await evaljs(`${A}.debug()`)));
+    console.log('errors on page', await errorsOnPage());
+  },
+  // No Web Audio at all (e.g. a locked-down browser): the game must run silently.
+  async noaudio() {
+    console.log('supported', await evaljs(`JSON.stringify(krill.audio.debug())`));
+    console.log('unlock', await evalGesture(`krill.audio.unlock()`));
+    await key('keyDown', 'KeyW', 'w');
+    await sleep(2000);
+    await mouse('mousePressed', 640, 360, 'right'); await sleep(900); await mouse('mouseReleased', 640, 360, 'right');
+    await sleep(1500);
+    await evaljs(`(() => { krill.audio.event('blow', {}); krill.audio.event('splash', { speed: 8, attitude: 1 }); krill.audio.ui('tick');
+      krill.audio.setVolume(0.5); krill.audio.setMuted(true); return 1; })()`);
+    await keyTap('Escape', 'Escape');
+    await sleep(600);
+    console.log('pause audio controls', await evaljs(`document.getElementById('sound-btn').textContent + ' | disabled=' + document.getElementById('sound-vol').disabled`));
+    console.log('errors on page', await errorsOnPage());
+  },
   async menu() {
     await shot('menu');
     await keyTap('ArrowRight', 'ArrowRight');
@@ -700,6 +829,7 @@ try {
   };
   await send('Runtime.enable');
   await send('Page.enable');
+  if (preload[scenario]) await send('Page.addScriptToEvaluateOnNewDocument', { source: preload[scenario] });
   const query = noAutostart.has(scenario) ? `?test&species=${species}` : `?autostart=${species}`;
   await send('Page.navigate', { url: `http://localhost:${port}/${query}` });
   await sleep(4000);

@@ -144,6 +144,11 @@
               <button id="restart-btn" class="text-btn quiet"><span class="btn-label">Restart</span></button>
               <button id="cue-btn" class="text-btn quiet cue-btn" aria-pressed="true">Prey cue &middot; <span class="cue-state">on</span></button>
             </div>
+            <div class="pause-audio" id="pause-audio">
+              <button id="sound-btn" class="text-btn quiet cue-btn" aria-pressed="true">Sound &middot; <span class="sound-state">on</span></button>
+              <input id="sound-vol" class="vol" type="range" min="0" max="100" step="5" value="80" aria-label="Volume" />
+              <button id="heart-btn" class="text-btn quiet cue-btn" aria-pressed="false" title="Softer low-oxygen heartbeat">Heartbeat &middot; <span class="heart-state">full</span></button>
+            </div>
           </section>
 
           <!-- Monterey Bay map: ink relief + contours, regions, you -->
