@@ -522,12 +522,19 @@ void main() {
 	// carapace glints: a krill twisting past the specular angle
 	float tw = sin( uTime * ( 1.3 + 5.0 * s1 ) + aSeed * 57.0 + dist0 * uTime * 9.0 );
 	float glint = pow( max( tw, 0.0 ), mix( 90.0, 14.0, dist0 ) );
-	col += glint * ( swSunAt( p ) * KW_SUNCOL + swAmbAt( p ) * KW_W0 * 4.0 * dist0 ) * ( 1.6 + 9.0 * dist0 ) * vec3( 1.0, 0.92, 0.85 );
+	col += glint * ( swSunAt( p ) * KW_SUNCOL + swAmbAt( p ) * KW_W0 * 4.0 * dist0 ) * ( 1.2 + 4.0 * dist0 ) * vec3( 1.0, 0.92, 0.85 );
 	// photophores: blue-green bioluminescent flashes when disturbed (constant
 	// absolute radiance: invisible by day, sparks at night)
-	float bl = pow( max( sin( uTime * ( 5.0 + 9.0 * s1 ) + aSeed * 31.0 ), 0.0 ), 20.0 ) * dist0;
-	col += bl * vec3( 0.03, 0.34, 0.5 ) * 0.9;
-	vAlpha = min( 1.0, vAlpha * ( 1.0 + 1.5 * bl + 2.0 * glint * dist0 ) );
+	float bl = pow( max( sin( uTime * ( 5.0 + 9.0 * s1 ) + aSeed * 31.0 ), 0.0 ), 40.0 ) * dist0 * step( 0.6, fract( aSeed * 3.3 ) );
+	// readability: the camera's night exposure is capped, so photophores are
+	// boosted as the surface light level (KW_LIGHT) falls
+	float blGain = 1.0 + 3.0 * ( 1.0 - clamp( KW_LIGHT, 0.0, 1.0 ) );
+	// peak kept under the bloom threshold at night exposure (1-px HDR spikes
+	// turn into blocky bloom squares); visibility comes from size + alpha
+	col += bl * vec3( 0.03, 0.34, 0.5 ) * 0.09 * blGain;
+	vAlpha = min( 1.0, max( vAlpha * ( 1.0 + 2.0 * glint * dist0 ), bl * fade * bp.w ) );
+	// a flashing krill is a point light: at least ~2 px
+	if ( bl > 0.05 ) { vHalf = max( vHalf, vec2( 1.4 ) ); vSize = max( vSize, 5.0 ); gl_PointSize = vSize; }
 	vColor = kwWater( col, cameraPosition, p );
 }
 `;
@@ -664,7 +671,7 @@ void main() {
 	lit = mix( lit, bg * mix( vec3( 1.0 ), c * 1.3, 0.6 ), 0.45 * ( 1.0 - eye ) * ( 1.0 - 0.6 * gut ) );
 	// photophores (disturbed)
 	float bl = pow( max( sin( uTime * 7.0 + vSeed * 31.0 ), 0.0 ), 16.0 ) * vDist;
-	lit += bl * vec3( 0.03, 0.34, 0.5 ) * ( 1.0 - smoothstep( 0.0, 0.12, length( vec2( u + 0.1, vn * 0.3 ) ) ) ) * 4.0;
+	lit += bl * vec3( 0.03, 0.34, 0.5 ) * ( 1.0 - smoothstep( 0.0, 0.12, length( vec2( u + 0.1, vn * 0.3 ) ) ) ) * 0.3 * ( 1.0 + 3.0 * ( 1.0 - clamp( KW_LIGHT, 0.0, 1.0 ) ) );
 	gl_FragColor = vec4( lit, alpha );
 	#include <fog_fragment>
 }
