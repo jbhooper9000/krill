@@ -187,8 +187,17 @@ export class UI {
     }
   }
 
+  // Region under the whale (from the Monterey terrain): shown on change.
+  setRegion(name) {
+    if (!name || name === this._region) return;
+    this._region = name;
+    this._renderPlace();
+    if (!$('hud').classList.contains('hidden')) this._show($('hud-place'));
+  }
+
   _renderPlace() {
-    $('hud-place').textContent = this._clock ? `Monterey Bay · ${this._clock}` : 'Monterey Bay';
+    const place = this._region || 'Monterey Bay';
+    $('hud-place').textContent = this._clock ? `${place} · ${this._clock}` : place;
   }
 
   // Breath (§4.1): arc only below 50 %, amber below 25 %, heartbeat below 30 %.

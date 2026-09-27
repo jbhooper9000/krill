@@ -385,7 +385,7 @@ const scenarios = {
 
     // 5. far overview: camera high over the bay looking across the canyon
     await clearWater(0, 200000, 20);
-    await evaljs(`(() => { krill.world.surface.visible = false; krill.world._rays.visible = false; krill.world.snow.visible = false; const t = krill.terrain, c = krill.controller;
+    await evaljs(`(() => { krill.world.surface.visible = false; krill.world.snow.visible = false; const t = krill.terrain, c = krill.controller;
       const [X, Z] = t.project(36.66, -121.86); const [TX, TZ] = t.project(36.76, -122.06);
       c.position.set(X - t.origin.x, -30, Z - t.origin.y); c._updateCamera = function () {
         this.camera.position.set(this.position.x, 9000, this.position.z);
