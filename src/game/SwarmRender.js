@@ -47,6 +47,9 @@ export const swarmUniforms = {
   uWhaleLen: { value: 14 },
   uMouth: { value: new THREE.Vector3(0, -1000, 0) },
   uLunge: { value: 0 }, // 0..1, eased
+  // readability gain on the krill skin radiance (documented compromise, see
+  // swKrillPatch): lets a day patch read at 30-60 m in Monterey-green water
+  uPatchGain: { value: 3.0 },
 };
 
 // Viewport-dependent uniforms, refreshed from onBeforeRender (the only place
@@ -156,6 +159,7 @@ float swHash( float n ) { return fract( sin( n ) * 43758.5453123 ); }
 // the surface) and the diffuse field. No caustic Voronoi here: it is costly
 // and invisible at swarm depths; the near-surface flicker comes from glints.
 const LIGHT_GLSL = /* glsl */ `
+uniform float uPatchGain;
 vec3 swSunAt( vec3 p ) {
 	return exp( - kwTauDown( p.y - KW_LEVEL ) / max( KW_SUNW.y, 0.3 ) ) * KW_KEYT;
 }
@@ -171,6 +175,28 @@ vec3 swScatter( vec3 p, vec3 wo, vec3 albedo, float shadow ) {
 	vec3 sun = swSunAt( p ) * shadow * KW_SUNCOL * ( 0.03 + 0.03 * ph );
 	vec3 amb = swAmbAt( p ) * ( KW_W0 * 0.7 + vec3( 0.006 ) );
 	return albedo * ( sun + amb );
+}
+// A dense krill patch seen by day (PLAYTEST_2 N3). Krill are cm-sized,
+// reflective scatterers: unlike the water's particulates (whose phase function
+// is sharply forward-peaked, ~0.005/sr at 90 deg) they send a large share of
+// the down-welling light sideways and back (~0.08/sr, near-Lambertian). So a
+// patch's sunlit top glows copper against the water while its self-shadowed
+// core and underside stay dark. Documented compromise: the effective albedo is
+// ~2x a single krill's (population-integrated carapace glints + multiple
+// scattering in the lit skin), so the patch reads at 30-60 m in turbid water.
+vec3 swKrillPatch( vec3 p, vec3 wo, float shadow ) {
+	float cosT = dot( - wo, KW_SUNW );
+	float g = 0.55;
+	float fwd = ( 1.0 - g * g ) / pow( max( 1.0 + g * g - 2.0 * g * cosT, 1e-3 ), 1.5 );
+	vec3 albedo = vec3( 0.62, 0.34, 0.2 ) * 2.0;
+	// the forward (diffraction) lobe only for the directly lit top skin: side-
+	// lit and self-shadowed krill don't see the sun's direction, so from below
+	// the patch stays a dark silhouette against the surface
+	float topLit = smoothstep( 0.72, 0.95, shadow );
+	vec3 key = swSunAt( p ) * KW_SUNCOL * shadow * ( 0.08 + 0.035 * fwd * topLit );
+	// diffuse field: mostly from above too, so it is also shadowed (less so)
+	vec3 amb = swAmbAt( p ) * KW_W0 * 1.2 * mix( 0.25, 1.0, shadow );
+	return albedo * ( key + amb ) * uPatchGain;
 }
 `;
 
@@ -213,7 +239,9 @@ const DENS_MAX = 1.0; // boids/m^3 mapped to 1.0 in the grid
 // × 0.3 cm² each), so light through a 25 m patch is cut to ~10%
 const SIGMA_PER_BOID = 0.3;
 const SLICES = 32;
-const INFLATE = 1.3;
+const INFLATE = 1.45;
+const SHADOW_DEPTH = 26; // m of shaded water drawn under a patch
+const SHADOW_GAIN = 1.0;
 
 const volumeVert = /* glsl */ `
 attribute vec2 corner;
@@ -276,18 +304,28 @@ void main() {
 	vec3 wq = p * 0.07 + vec3( 0.0, uTime * 0.012, 0.0 );
 	vec3 warp = texture( uNoise, wq * 0.125 ).rgb - 0.5;
 	vec3 uvw0 = ( p - uBoxMin - 0.5 * uBoxSize ) / ( uBoxSize * uInflate ) + 0.5;
-	if ( any( lessThan( uvw0, vec3( 0.0 ) ) ) || any( greaterThan( uvw0, vec3( 1.0 ) ) ) ) discard;
+	// below the patch: the column of water it shades (see sigmaS)
+	float below = clamp( - uvw0.y * uBoxSize.y * uInflate / SW_SHADOW_DEPTH, 0.0, 1.0 );
+	if ( any( lessThan( uvw0.xz, vec2( 0.0 ) ) ) || any( greaterThan( uvw0, vec3( 1.0 ) ) ) || below >= 1.0 ) discard;
 	// the density field is drawn ~1.3x the flock's extent: the boids are the
 	// dense core the whale feeds in, the halo the diffuse edge of a real patch
 	vec3 boxC = uBoxMin + 0.5 * uBoxSize;
-	vec2 g = texture( uGrid, ( boxC + ( p - boxC ) / uInflate + warp * 6.0 - uBoxMin ) / uBoxSize ).rg;
+	vec3 guv = ( boxC + ( p - boxC ) / uInflate + warp * 6.0 - uBoxMin ) / uBoxSize;
+	vec2 g = texture( uGrid, vec3( guv.x, max( guv.y, 0.5 / float( SW_GRID ) ), guv.z ) ).rg;
+	if ( uvw0.y < 0.0 ) g.r = 0.0; // under the box: shadow only
 	vec3 edge = min( uvw0, 1.0 - uvw0 );
-	// cut the blur tails (grazing rays integrate them over tens of metres)
-	float n = max( g.r - 0.05, 0.0 ) * ( uDensMax / 0.95 ) * smoothstep( 0.02, 0.3, min( edge.x, min( edge.y, edge.z ) ) ); // boids / m^3
+	float edgeF = smoothstep( 0.02, 0.3, min( edge.x, min( max( edge.y, uvw0.y < 0.0 ? 1.0 : 0.0 ), edge.z ) ) );
+	// a crisp boundary: real patches have sharp (often flat) edges, the blurred
+	// splat is thresholded like an isosurface, with the interior kept
+	float n = g.r * smoothstep( 0.07, 0.16, g.r ) * ( uDensMax / 0.95 ) * edgeF; // boids / m^3
 	// patchiness: krill aggregate in sheets and knots that slowly churn
-	float nz = texture( uNoise, ( p * 0.22 + vec3( 0.0, uTime * 0.04, uTime * 0.03 ) ) * 0.125 ).a * 0.6
-		+ texture( uNoise, ( p * 0.75 - vec3( uTime * 0.07, 0.0, 0.0 ) ) * 0.125 + 0.37 ).a * 0.4;
-	n *= smoothstep( 0.1, 0.9, nz ) * 1.9;
+	// sheets are flattened vertically (krill layer), knots and grain churn slowly
+	vec3 sp = p * vec3( 1.0, 2.2, 1.0 );
+	float nz = texture( uNoise, ( sp * 0.2 + vec3( 0.0, uTime * 0.04, uTime * 0.03 ) ) * 0.125 ).a * 0.55
+		+ texture( uNoise, ( sp * 0.7 - vec3( uTime * 0.07, 0.0, 0.0 ) ) * 0.125 + 0.37 ).a * 0.3
+		+ texture( uNoise, ( p * 2.3 + vec3( 0.0, 0.0, uTime * 0.1 ) ) * 0.125 + 0.71 ).a * 0.15;
+	float knots = smoothstep( 0.2, 0.8, nz );
+	n *= knots * knots * 2.6;
 	// the whale's body (and its bow wave during a lunge) pushes krill aside
 	vec3 rel = p - uWhalePos;
 	float along = clamp( dot( rel, uWhaleFwd ), - 0.5 * uWhaleLen, 0.55 * uWhaleLen );
@@ -304,17 +342,21 @@ void main() {
 	n *= mix( 0.15, 1.0, tunnel );
 	n *= smoothstep( 1.5, 7.0, length( p - cameraPosition ) );
 	float sigma = n * uSigma;
-	float a = 1.0 - exp( - sigma * ds );
+	// the patch shades the water under it: in that column the water in-scatters
+	// less down-welling light, a darker "hole" hanging below the swarm. Modelled
+	// as missing in-scatter (black, weighted by the water's scattering ~0.6 c),
+	// fading with depth as side light fills it in.
+	float shadowK = ( 1.0 - g.g ) * edgeF * ( 1.0 - below ) * ( 1.0 - below );
+	float sigmaS = shadowK * 0.6 * kwExtAt( p.y - KW_LEVEL ).g * SW_SHADOW_GAIN;
+	float a = 1.0 - exp( - ( sigma + sigmaS ) * ds );
 	if ( a < 0.002 ) discard;
-	// krill: translucent orange-red shells, dark guts -> rust-brown at depth
-	vec3 albedo = vec3( 0.46, 0.2, 0.13 );
-	vec3 col = swScatter( p, - dir, albedo, g.g );
+	vec3 col = swKrillPatch( p, - dir, g.g ) * ( 0.6 + 0.6 * knots ) * ( sigma / max( sigma + sigmaS, 1e-6 ) );
 	gl_FragColor = vec4( col, a );
 	// water model along the view ray. Readability compromise (like KW_FLOOR):
-	// beyond ~20 m the patch is fogged as if up to 2x closer, so a hunted
-	// swarm still reads as a smudge at 60–100 m in this turbid water.
+	// beyond ~10 m the patch is fogged as if up to ~2.2x closer (0.45 by 60 m),
+	// so the prey reads by eye at 30-60 m in Monterey-green water (N3).
 	float dCam = length( vKwWorld - cameraPosition );
-	vec3 pFog = cameraPosition + ( vKwWorld - cameraPosition ) * mix( 1.0, 0.5, smoothstep( 20.0, 90.0, dCam ) );
+	vec3 pFog = cameraPosition + ( vKwWorld - cameraPosition ) * mix( 1.0, 0.45, smoothstep( 10.0, 60.0, dCam ) );
 	gl_FragColor.rgb = kwWater( gl_FragColor.rgb, cameraPosition, pFog );
 }
 `;
@@ -361,6 +403,7 @@ class SwarmVolume {
         uSigma: { value: SIGMA_PER_BOID },
         uInflate: { value: INFLATE },
       },
+      defines: { SW_GRID: GRID, SW_SHADOW_DEPTH: SHADOW_DEPTH.toFixed(1), SW_SHADOW_GAIN: SHADOW_GAIN.toFixed(2) },
       vertexShader: volumeVert,
       fragmentShader: volumeFrag,
       transparent: true,
@@ -417,21 +460,49 @@ class SwarmVolume {
     for (let pass = 0; pass < 5; pass++) {
       this._blur(1); this._blur(G); this._blur(G * G);
     }
-    // encode density and the downward sun transmittance (column from the top)
+    // encode density and the skylight transmittance: at depth the down-welling
+    // field is diffuse (horizontal radiance ~1/3 of vertical), so a point is lit
+    // through the krill above it AND through the thinnest horizontal path out
+    // of the patch: T = 0.65 T_down + 0.35 max(T_+x, T_-x, T_+z, T_-z)
     const out = this.bytes;
     const sig = SIGMA_PER_BOID;
+    const td = this._tDown || (this._tDown = new Float32Array(G * G * G));
+    const ts = this._tSide || (this._tSide = new Float32Array(G * G * G));
+    ts.fill(0);
     for (let iz = 0; iz < G; iz++) {
       for (let ix = 0; ix < G; ix++) {
         let od = 0;
         for (let iy = G - 1; iy >= 0; iy--) {
           const k = ix + iy * G + iz * G * G;
-          const v = d[k];
-          od += v * sig * sy * 0.5;
-          out[k * 2] = Math.min(255, Math.round((v / DENS_MAX) * 255));
-          out[k * 2 + 1] = Math.round(Math.exp(-od) * 255);
-          od += v * sig * sy * 0.5;
+          od += d[k] * sig * sy * 0.5;
+          td[k] = Math.exp(-od);
+          od += d[k] * sig * sy * 0.5;
         }
       }
+    }
+    // horizontal sweeps along +-x and +-z
+    const sweep = (stride, span, step, lines) => {
+      for (const base of lines) {
+        let od = 0;
+        for (let a = 0; a < G; a++) {
+          const k = base + (step > 0 ? a : G - 1 - a) * stride;
+          od += d[k] * sig * span * 0.5;
+          const t = Math.exp(-od);
+          if (t > ts[k]) ts[k] = t;
+          od += d[k] * sig * span * 0.5;
+        }
+      }
+    };
+    const xl = this._xl || (this._xl = []), zl = this._zl || (this._zl = []);
+    if (!xl.length) {
+      for (let iz = 0; iz < G; iz++) for (let iy = 0; iy < G; iy++) xl.push(iy * G + iz * G * G);
+      for (let iy = 0; iy < G; iy++) for (let ix = 0; ix < G; ix++) zl.push(ix + iy * G);
+    }
+    sweep(1, sx, 1, xl); sweep(1, sx, -1, xl);
+    sweep(G * G, sz, 1, zl); sweep(G * G, sz, -1, zl);
+    for (let k = 0; k < G * G * G; k++) {
+      out[k * 2] = Math.min(255, Math.round((d[k] / DENS_MAX) * 255));
+      out[k * 2 + 1] = Math.round((0.65 * td[k] + 0.35 * ts[k]) * 255);
     }
     this.tex.needsUpdate = true;
     const u = this.material.uniforms;
@@ -439,8 +510,10 @@ class SwarmVolume {
     u.uBoxSize.value.set(x1 - x0, y1 - y0, z1 - z0);
     this.center.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
     this.radius = 0.5 * INFLATE * Math.hypot(x1 - x0, y1 - y0, z1 - z0);
-    u.uCenter.value.copy(this.center);
-    u.uRadius.value = this.radius;
+    // slices also cover the shaded column below
+    const hy = 0.5 * INFLATE * (y1 - y0);
+    u.uCenter.value.set(this.center.x, this.center.y - SHADOW_DEPTH / 2, this.center.z);
+    u.uRadius.value = 0.5 * Math.hypot(INFLATE * (x1 - x0), 2 * hy + SHADOW_DEPTH, INFLATE * (z1 - z0));
   }
 
   _blur(stride) {
@@ -507,14 +580,13 @@ void main() {
 	vHalf = max( vec2( halfLen, halfWid ), vec2( 0.75, 0.5 ) );
 	vSize = 2.0 * vHalf.x + 2.0;
 	gl_PointSize = vSize;
-	float fade = smoothstep( 1.2, 2.2, z ) * ( 1.0 - smoothstep( 55.0, 75.0, z ) );
+	float fade = smoothstep( 1.2, 2.2, z ) * ( 1.0 - smoothstep( 80.0, 110.0, z ) );
 	vAlpha = bp.w * cov * fade * ( 0.55 + 0.45 * s1 );
 	if ( bp.w < 0.5 || vAlpha < 0.003 ) gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
 
 	// lighting: body colour varies from pale translucent to deep red
 	vec3 wo = normalize( cameraPosition - p );
-	vec3 albedo = mix( vec3( 0.55, 0.26, 0.16 ), vec3( 0.42, 0.1, 0.06 ), s1 );
-	vec3 col = swScatter( p, wo, albedo, 1.0 ) * 1.25;
+	vec3 col = swKrillPatch( p, wo, 0.55 ) * mix( 0.6, 0.35, s1 );
 	// carapace glints: a krill twisting past the specular angle
 	float tw = sin( uTime * ( 1.3 + 5.0 * s1 ) + aSeed * 57.0 + dist0 * uTime * 9.0 );
 	float glint = pow( max( tw, 0.0 ), mix( 90.0, 14.0, dist0 ) );
@@ -832,7 +904,7 @@ export class KrillSwarmView {
     const len = 0.045 * lenScale;
     this.speckMat.uniforms.uLen.value = len;
     this.nearMat.uniforms.uLen.value = len;
-    this.specks.visible = this.volume.mesh.visible && dc < 75;
+    this.specks.visible = this.volume.mesh.visible && dc < 110;
     // distant patches are small on screen: half the slices
     this.volume.material.uniforms.uSlices.value = dc > this.volume.radius * 1.5 ? SLICES / 2 : SLICES;
     // near field
