@@ -77,7 +77,13 @@ export class Game {
     this.effects.resize(w, h);
   }
 
-  start(speciesId) {
+  // Async: waits for the bathymetry (manifest + coarse grids + start tiles) so
+  // the whale, floor clamp and krill sites use real heights, not the fallback.
+  async start(speciesId) {
+    if (this._starting || this.running) return;
+    this._starting = true;
+    if (!this.terrain.loaded) await this.terrain.ready;
+    this._starting = false;
     this._clearPreview();
     this.speciesId = speciesId;
     this.whale = new Whale(speciesId);

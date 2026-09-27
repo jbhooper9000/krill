@@ -151,6 +151,14 @@ export class PlayerController {
       this._camPos.lerp(_desiredCam, damp(14, dt));
       this._camLook.lerp(_desiredLook, damp(18, dt));
     }
+    // NaN guard: one bad frame (e.g. a scripted teleport) must not poison the camera forever
+    if (!Number.isFinite(this._camPos.x + this._camPos.y + this._camPos.z)
+      || !Number.isFinite(this._camLook.x + this._camLook.y + this._camLook.z)) {
+      const ok = Number.isFinite(_desiredCam.x + _desiredCam.y + _desiredCam.z);
+      this._camPos.copy(ok ? _desiredCam : this.position);
+      if (!ok) this._camPos.z += L * 2;
+      this._camLook.copy(this.position);
+    }
     this.camera.position.copy(this._camPos);
     if (this.shake > 0.001) {
       const a = this.shake * this.shake * L * 0.025;
