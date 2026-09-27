@@ -133,6 +133,7 @@ export class UI {
     if (!SPECIES_INFO[id]) return;
     const changed = id !== this.species;
     this.species = id;
+    if (changed && !instant) this.audio?.ui('tick'); // [audio]
     this.tabs.forEach((t) => {
       t.classList.toggle('locked', !!LOCKED_SPECIES[t.dataset.species]);
       const on = t.dataset.species === id;
@@ -412,6 +413,8 @@ export class UI {
 
   // One-line prompt under the rings (e.g. why F did nothing). Amber: it's a warning.
   prompt(text) {
+    if (text !== this._lastPromptText || performance.now() > this._promptUntil) this.audio?.ui('tock'); // [audio]
+    this._lastPromptText = text;
     const el = $('hud-prompt');
     el.textContent = text;
     el.classList.add('warn');
@@ -484,6 +487,7 @@ export class UI {
   }
 
   setPaused(paused) {
+    if (paused !== !$('pause-screen').classList.contains('hidden')) this.audio?.ui(paused ? 'open' : 'close'); // [audio]
     $('pause-screen').classList.toggle('hidden', !paused);
     $('hud').classList.toggle('paused', paused);
     if (!paused) return;
@@ -531,6 +535,30 @@ export class UI {
     const b = $('cue-btn');
     b.setAttribute('aria-pressed', String(this.preyCue));
     b.querySelector('.cue-state').textContent = this.preyCue ? 'on' : 'off';
+  }
+
+  // Sound settings on the pause screen (src/game/Audio.js keeps them in localStorage).
+  attachAudio(audio) {
+    this.audio = audio;
+    const btn = $('sound-btn'), vol = $('sound-vol'), heart = $('heart-btn');
+    if (!btn || !vol || !heart) return;
+    const render = () => {
+      const s = audio.settings;
+      const on = audio.enabled && !s.muted;
+      btn.setAttribute('aria-pressed', String(on));
+      btn.querySelector('.sound-state').textContent = !audio.enabled ? 'unavailable' : on ? 'on' : 'off';
+      btn.disabled = vol.disabled = heart.disabled = !audio.enabled;
+      vol.value = String(Math.round(s.volume * 100));
+      heart.setAttribute('aria-pressed', String(!!s.reducedHeart));
+      heart.querySelector('.heart-state').textContent = s.reducedHeart ? 'soft' : 'full';
+    };
+    btn.addEventListener('click', () => { audio.unlock(); audio.setMuted(!audio.settings.muted); render(); });
+    vol.addEventListener('input', () => { audio.unlock(); audio.setVolume(Number(vol.value) / 100); render(); });
+    vol.addEventListener('change', () => audio.ui('tick'));
+    heart.addEventListener('click', () => { audio.setReducedHeart(!audio.settings.reducedHeart); render(); });
+    // arrow keys adjust the slider; don't let Enter on it resume by accident
+    vol.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.stopPropagation(); });
+    render();
   }
 
   // Kept for API compatibility: dismisses whatever control hint is showing.

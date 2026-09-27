@@ -1567,3 +1567,64 @@ button {
 }
 .dive-btn.locked .key { display: none; }
 .tab.locked { opacity: 0.55; }
+
+/* ---------- sound settings (pause screen) ---------- */
+.pause-audio {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.pause-audio .cue-btn {
+  margin-left: 0;
+}
+
+.pause-audio .vol {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 110px;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.pause-audio .vol::-webkit-slider-runnable-track {
+  height: 1px;
+  background: rgb(var(--ink) / var(--a-lo));
+}
+
+.pause-audio .vol::-moz-range-track {
+  height: 1px;
+  background: rgb(var(--ink) / var(--a-lo));
+}
+
+.pause-audio .vol::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 7px;
+  height: 7px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: rgb(var(--ink) / var(--a-mid));
+}
+
+.pause-audio .vol::-moz-range-thumb {
+  width: 7px;
+  height: 7px;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(var(--ink) / var(--a-mid));
+}
+
+.pause-audio .vol:hover::-webkit-slider-thumb,
+.pause-audio .vol:focus-visible::-webkit-slider-thumb {
+  background: rgb(var(--bio) / var(--a-hi));
+}
+
+.pause-audio .vol:disabled {
+  opacity: 0.35;
+}
+
+.pause.daycard .pause-audio {
+  display: none;
+}

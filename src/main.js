@@ -1,5 +1,6 @@
 import { Game } from './game/Game.js';
 import { UI } from './ui/UI.js';
+import { GameAudio } from './game/Audio.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
@@ -7,6 +8,18 @@ const canvas = $('game');
 const ui = new UI();
 const game = new Game(canvas, ui);
 ui.attach(game);
+
+// Procedural sound (src/game/Audio.js). Browsers only allow audio after a user
+// gesture, so the context is created on the first click / key press (the
+// start button counts). ?noaudio turns it off.
+const audio = new GameAudio({ disabled: new URLSearchParams(location.search).has('noaudio') });
+game.audio = audio;
+ui.attachAudio(audio);
+const unlockAudio = () => {
+  if (!audio.unlock() && audio.enabled) return;
+  for (const t of ['pointerdown', 'keydown', 'touchend']) window.removeEventListener(t, unlockAudio, true);
+};
+for (const t of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(t, unlockAudio, true);
 console.log('[Krill] boot ready');
 
 // Surface any runtime error on-screen instead of failing silently.
