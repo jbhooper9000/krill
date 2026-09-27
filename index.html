@@ -24,6 +24,12 @@
     <div id="app">
       <canvas id="game"></canvas>
 
+      <!-- O2 veil: diegetic vignette + desaturation below 30 % O2, tunnel on
+           blackout. Sits under the HUD so prompts stay readable above it. -->
+      <div id="o2-veil" class="o2-veil" aria-hidden="true"></div>
+      <!-- Prey cue: faint edge shimmer toward the nearest krill patch when hungry -->
+      <div id="prey-cue" class="prey-cue" aria-hidden="true"><svg viewBox="-60 -20 120 40"><path d="M-50 8 Q0 -12 50 8" /></svg></div>
+
       <!-- In-game HUD: ink on glass. Every element auto-hides when idle (see UI.js). -->
       <div id="hud" class="hidden" aria-hidden="true">
         <!-- context line (top-left), shown on start and on zone change -->
@@ -63,7 +69,7 @@
         <!-- breath arc (doc 4.1 / 6.2): only below 50 % O2, amber below 25 % -->
         <div id="hud-o2" class="hud-el hud-o2">
           <svg viewBox="0 0 120 26" aria-hidden="true"><path class="track" d="M2 24 Q60 -8 118 24" pathLength="100" /><path id="o2-arc" class="arc" d="M2 24 Q60 -8 118 24" pathLength="100" /></svg>
-          <span class="o2-label">O<sub>2</sub></span>
+          <span class="o2-label">O<sub>2</sub> <span id="o2-val" class="val"></span></span>
         </div>
 
         <!-- stomach: quiet, surfaces only when nearly full -->
@@ -81,9 +87,6 @@
           <span id="surge-pct" class="val">0%</span>
         </div>
       </div>
-
-      <!-- O2 veil: diegetic vignette + desaturation below 30 % O2, tunnel on blackout -->
-      <div id="o2-veil" class="o2-veil" aria-hidden="true"></div>
 
       <!-- Start / species select: the live ocean is the menu -->
       <div id="start-screen" class="overlay menu" role="dialog" aria-label="Choose your whale">
@@ -107,35 +110,56 @@
         </div>
       </div>
 
-      <!-- Pause: radial scrim + text only (the Monterey map arrives with E3) -->
+      <!-- Pause / map (design doc 6.5) and the end-of-day card (.daycard) -->
       <div id="pause-screen" class="overlay pause hidden" role="dialog" aria-label="Paused">
         <div class="pause-scrim"></div>
-        <div class="pause-head">
-          <h2 class="pause-title">Paused</h2>
-          <div id="pause-species" class="pause-meta"></div>
-        </div>
-        <!-- map shell: bathymetric contours go here once the Monterey world exists -->
-        <div id="pause-map" class="pause-map" hidden></div>
-        <div class="pause-body">
-          <div id="pause-condition" class="pause-condition" hidden>
-            <span class="lbl">Condition</span>
-            <span class="cond-line"><i id="cond-fill"></i><i id="cond-dot" class="dot"></i><i id="cond-target" class="target"></i></span>
-            <span id="cond-val" class="val"></span>
-          </div>
-          <div id="pause-stats" class="pause-stats"></div>
-          <dl class="controls-list">
-            <dt>W / hold left mouse</dt><dd>Swim</dd>
-            <dt>Mouse</dt><dd>Steer</dd>
-            <dt>Space &middot; Shift</dt><dd>Rise &middot; dive</dd>
-            <dt>Hold right mouse</dt><dd>Charge lunge, release to burst</dd>
-            <dt>Hold F</dt><dd>Breach, when Surge is ready</dd>
-            <dt>Wheel</dt><dd>Camera distance</dd>
-            <dt>Esc &middot; T</dt><dd>Pause &middot; tuning</dd>
-          </dl>
-        </div>
-        <div class="pause-actions">
-          <button id="resume-btn" class="text-btn">Resume <span class="key">&#9166;</span></button>
-          <button id="restart-btn" class="text-btn quiet">Restart</button>
+        <div class="pause-layout">
+          <section class="pause-text">
+            <div class="pause-head">
+              <h2 id="pause-title" class="pause-title">Paused</h2>
+              <div id="pause-species" class="pause-meta"></div>
+            </div>
+            <p id="day-outcome" class="day-outcome"></p>
+            <div class="pause-body">
+              <div id="pause-condition" class="pause-condition" hidden>
+                <span class="lbl">Condition</span>
+                <span class="cond-line"><i id="cond-fill"></i><i id="cond-dot" class="dot"></i><i id="cond-target" class="target"></i></span>
+                <span id="cond-val" class="val"></span>
+              </div>
+              <dl id="day-stats" class="day-stats"></dl>
+              <div id="pause-stats" class="pause-stats"></div>
+              <dl class="controls-list">
+                <dt>W / hold left mouse</dt><dd>Swim</dd>
+                <dt>Mouse</dt><dd>Steer</dd>
+                <dt>Space &middot; Shift</dt><dd>Rise &middot; dive; hold Space at the surface for a deep breath</dd>
+                <dt>Hold right mouse</dt><dd>Charge lunge, release to burst</dd>
+                <dt>Hold F</dt><dd>Breach, when Surge is ready</dd>
+                <dt>Wheel</dt><dd>Camera distance</dd>
+                <dt>Esc &middot; T</dt><dd>Pause &middot; tuning</dd>
+              </dl>
+            </div>
+            <div class="pause-actions">
+              <button id="resume-btn" class="text-btn"><span class="btn-label">Resume</span> <span class="key">&#9166;</span></button>
+              <button id="restart-btn" class="text-btn quiet"><span class="btn-label">Restart</span></button>
+              <button id="cue-btn" class="text-btn quiet cue-btn" aria-pressed="true">Prey cue &middot; <span class="cue-state">on</span></button>
+            </div>
+          </section>
+
+          <!-- Monterey Bay map: ink relief + contours, regions, you -->
+          <section id="pause-map" class="pause-map" aria-label="Map of Monterey Bay">
+            <div class="map-frame">
+              <canvas class="map-base" aria-hidden="true"></canvas>
+              <canvas class="map-overlay" aria-hidden="true"></canvas>
+              <div class="map-labels"></div>
+              <svg class="map-you" viewBox="-12 -12 24 24" aria-label="You"><path d="M0 -10 L6 8 L0 4 L-6 8 Z" /></svg>
+              <div class="map-north" aria-hidden="true"><svg viewBox="-6 -10 12 20"><path d="M0 -9 L0 9 M0 -9 L-4 -3 M0 -9 L4 -3" /></svg><span>N</span></div>
+              <div class="map-scalebar"><span class="map-scale"></span><span class="map-scale-label"></span></div>
+            </div>
+            <div class="map-zoom">
+              <button class="text-btn quiet" data-map-level="bay" aria-pressed="true">Bay</button>
+              <button class="text-btn quiet" data-map-level="region" aria-pressed="false">Region</button>
+            </div>
+          </section>
         </div>
       </div>
 

@@ -9,6 +9,9 @@
 //   light per-frame read of controller state for the things the setters
 //   cannot know (surface proximity, airborne, run-up quality, breach window).
 
+import { SPECIES } from '../game/species.js';
+import { PauseMap } from './PauseMap.js';
+
 const $ = (id) => document.getElementById(id);
 const IDLE_MS = 4000;
 const TOAST_MS = 2500;
@@ -16,26 +19,35 @@ const PROMPT_MS = 1800;
 const DEPTH_PX = 3; // px per metre on the depth tape
 const DEPTH_MAX = 600;
 
-// Real facts in place of 1–5 ratings (§6.4).
+// Real facts in place of 1–5 ratings (§6.4). Length is read from SPECIES so
+// the menu always matches the model; mass and dive times are real figures.
 export const SPECIES_INFO = {
   humpback: {
     name: 'Humpback',
     latin: 'Megaptera novaeangliae',
-    facts: '14 m · 30 t · dives 3–8 min',
+    mass: '30 t',
+    dives: '3–8 min',
     desc: 'Bubble-nets krill and anchovy. Breaches often, rolling onto its back.',
   },
   blue: {
     name: 'Blue',
     latin: 'Balaenoptera musculus',
-    facts: '24 m · 100 t · dives 10–20 min',
+    mass: '100 t',
+    dives: '10–20 min',
     desc: 'The largest animal that has ever lived. Lunges through krill; breaches rarely, and only partly.',
   },
   sperm: {
     name: 'Sperm',
     latin: 'Physeter macrocephalus',
-    facts: '16 m · 45 t · dives 45–60 min',
+    mass: '45 t',
+    dives: '45–60 min',
     desc: 'Hunts squid in the dark of the canyon by echolocation, down to 1,200 m.',
   },
+};
+export const speciesFacts = (id) => {
+  const s = SPECIES_INFO[id];
+  const len = SPECIES[id] ? Math.round(SPECIES[id].length) : '';
+  return `${len} m · ${s.mass} · dives ${s.dives}`;
 };
 const SPECIES_ORDER = ['humpback', 'blue', 'sperm'];
 
@@ -44,7 +56,11 @@ const HINTS = {
   swim: '<b>W</b> or hold <b>left mouse</b> to swim<span class="sep"></span><b>Mouse</b> to steer<span class="sep"></span><b>Space</b> / <b>Shift</b> rise and dive',
   lunge: 'Hold <b>right mouse</b> to charge a lunge, release to burst through the swarm',
   breach: 'Surge is full · breach from one to four body lengths deep',
+  air: 'Air running low — surface to breathe <b>↑</b>',
+  breathe: 'Each blow refills your air<span class="sep"></span>hold <b>Space</b> at the surface for a deeper breath',
 };
+const ARROWS = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+const CUE_KEY = 'krill.preyCue';
 
 export class UI {
   constructor() {
@@ -72,7 +88,19 @@ export class UI {
     this._hintsDone = new Set();
     this._hint = null;
     this._hintShownAt = 0;
+    this._hintQueue = [];
     this._swimTime = 0;
+    this._runTime = 0;
+    this._dayCardNext = null;
+    this._v = null; // scratch vectors (cloned from the camera once attached)
+
+    // prey cue: a faint edge shimmer toward the nearest krill patch when
+    // hungry. On by default; toggled on the pause screen, remembered per viewer.
+    this.preyCue = true;
+    try { this.preyCue = localStorage.getItem(CUE_KEY) !== '0'; } catch { /* storage blocked */ }
+    this._renderCueBtn();
+    $('cue-btn').addEventListener('click', () => this.setPreyCue(!this.preyCue));
+    this.map = new PauseMap($('pause-map'));
 
     this._buildDepthTape();
     this._buildTabs();
@@ -111,7 +139,7 @@ export class UI {
       const s = SPECIES_INFO[this.species];
       $('sp-name').textContent = s.name;
       $('sp-latin').textContent = s.latin;
-      $('sp-facts').textContent = s.facts;
+      $('sp-facts').textContent = speciesFacts(this.species);
       $('sp-desc').textContent = s.desc;
       info.classList.remove('out');
     };
@@ -139,7 +167,7 @@ export class UI {
     $('hud').classList.remove('hidden');
     this._renderPlace();
     this._show($('hud-place'));
-    setTimeout(() => this._showHint('swim'), 900);
+    this._showHint('swim');
   }
 
   hideHud() {
@@ -209,12 +237,27 @@ export class UI {
     this._o2 = v;
     this._atSurface = !!opts.atSurface;
     const pct = Math.round(v * 100);
+    // blackout: the "Out of air" line stays up (above the veil) until air returns
+    if (blackout !== !!this._blackout) {
+      this._blackout = blackout;
+      const pr = $('hud-prompt');
+      if (blackout) {
+        pr.textContent = 'Out of air — your body takes over';
+        pr.classList.add('warn');
+        this._promptUntil = Infinity;
+        this._show(pr, Infinity);
+      } else {
+        this._promptUntil = 0;
+        if (pr.textContent.startsWith('Out of air')) this._hide(pr);
+      }
+    }
     const key = `${pct}|${blackout}`;
     if (key === this._o2Key) return;
     this._o2Key = key;
 
     const el = $('hud-o2');
-    $('o2-arc').style.strokeDasharray = `${pct} 100`;
+    $('o2-arc').style.strokeDasharray = `${Math.max(0.5, pct)} 100`;
+    $('o2-val').textContent = `${pct}%`;
     el.classList.toggle('low', v < 0.25);
     const heart = v < 0.3 && !blackout;
     // diving bradycardia: the beat slows as oxygen runs out
@@ -237,6 +280,7 @@ export class UI {
 
   // A spout at the surface: briefly show the breath arc refilling.
   blow() {
+    this._showHint('breathe', HINTS.breathe, 7000);
     const el = $('hud-o2');
     this._blowShow = true;
     this._show(el, 2500);
@@ -373,23 +417,39 @@ export class UI {
     this._hide($('hud-prompt'));
   }
 
-  // End-of-day summary (design doc 3.3), shown on the pause screen.
+  // End-of-day card (design doc 3.3): the pause screen in .daycard mode.
   // summary: { day, species, condition, target, stats, outcome, final }
   showDayCard(summary, onNext) {
     this._condition = { value: summary.condition, target: summary.target };
-    this.setPaused(true);
-    const s = summary.stats;
-    const n = (v) => `<b>${Math.round(v).toLocaleString()}</b>`;
-    $('pause-screen').classList.add('daycard');
-    document.querySelector('#pause-screen .pause-title').textContent = `Day ${summary.day} at sea`;
-    $('pause-stats').innerHTML =
-      `${n(s.kg)} kg of krill · ${n(s.dives)} dives · ${n(s.lunges)} lunges · best lunge ${n(s.bestLunge)} · ` +
-      `${n(s.breaches)} ${s.breaches === 1 ? 'breach' : 'breaches'}` +
-      (s.blackouts ? ` · ${n(s.blackouts)} ${s.blackouts === 1 ? 'blackout' : 'blackouts'}` : '') +
-      `<div class="day-outcome">${summary.outcome}</div>`;
-    const btn = $('resume-btn');
-    btn.firstChild.textContent = summary.final ? 'Start again ' : 'Next day ';
     this._dayCardNext = summary.final ? () => window.location.reload() : onNext;
+    $('pause-screen').classList.add('daycard');
+    this.setPaused(true);
+    $('pause-title').textContent = `Day ${summary.day} at sea`;
+
+    const outcome = $('day-outcome');
+    outcome.textContent = summary.outcome;
+    outcome.classList.toggle('warn', !!summary.final || summary.condition < summary.target * 0.75);
+
+    const s = summary.stats || {};
+    const sp = SPECIES[this.species];
+    const kgPer = sp && sp.krillKg ? sp.krillKg : 0;
+    const cells = [
+      ['Krill eaten', Math.round(s.kg || 0), 'kg'],
+      ['Dives', s.dives || 0],
+      ['Lunges', s.lunges || 0],
+      ['Best lunge', kgPer ? Math.round((s.bestLunge || 0) * kgPer) : s.bestLunge || 0, kgPer ? 'kg' : 'krill'],
+      ['Breaches', s.breaches || 0],
+      ['Blackouts', s.blackouts || 0],
+    ];
+    $('day-stats').innerHTML = cells
+      .map(([label, v, unit]) => `<div class="${v ? '' : 'zero'}"><dd>${v.toLocaleString()}${unit ? `<small>${unit}</small>` : ''}</dd><dt>${label}</dt></div>`)
+      .join('');
+
+    const resume = $('resume-btn');
+    resume.hidden = !!summary.final;
+    resume.querySelector('.btn-label').textContent = 'Next day';
+    $('restart-btn').querySelector('.btn-label').textContent = 'Start again';
+    (summary.final ? $('restart-btn') : resume).focus({ preventScroll: true });
   }
 
   // Called by the resume action: true if it closed a day card.
@@ -398,8 +458,10 @@ export class UI {
     if (!next) return false;
     this._dayCardNext = null;
     $('pause-screen').classList.remove('daycard');
-    document.querySelector('#pause-screen .pause-title').textContent = 'Paused';
-    $('resume-btn').firstChild.textContent = 'Resume ';
+    $('pause-title').textContent = 'Paused';
+    $('resume-btn').hidden = false;
+    $('resume-btn').querySelector('.btn-label').textContent = 'Resume';
+    $('restart-btn').querySelector('.btn-label').textContent = 'Restart';
     next();
     return true;
   }
@@ -407,30 +469,51 @@ export class UI {
   setPaused(paused) {
     $('pause-screen').classList.toggle('hidden', !paused);
     $('hud').classList.toggle('paused', paused);
-    if (paused) {
-      const s = SPECIES_INFO[this.species];
-      const clock = this._clock ? ` · ${this._clock}` : '';
-      $('pause-species').innerHTML = `${s.name} · <i>${s.latin}</i>${clock}`;
+    if (!paused) return;
+    const s = SPECIES_INFO[this.species];
+    const clock = this._clock ? ` · ${this._clock}` : '';
+    $('pause-species').innerHTML = `${s.name} · <i>${s.latin}</i>${clock}`;
 
-      const cond = this._condition;
-      $('pause-condition').hidden = !cond;
-      if (cond) {
-        const v = Math.max(0, Math.min(100, cond.value));
-        const t = Math.max(0, Math.min(100, cond.target));
-        $('cond-fill').style.width = `${v}%`;
-        $('cond-dot').style.left = `${v}%`;
-        $('cond-target').style.left = `${t}%`;
-        $('cond-val').innerHTML = `<b>${Math.round(v)}</b> → target ${Math.round(t)}`;
-      }
-
-      const n = (v) => `<b>${v.toLocaleString()}</b>`;
-      const parts = [];
-      if (this._krill > 0) parts.push(`${n(this._krill)} krill eaten`);
-      parts.push(`${n(this._breaches)} ${this._breaches === 1 ? 'breach' : 'breaches'}`);
-      if (!cond && this._level > 1) parts.push(`growth stage ${n(this._level)}`);
-      $('pause-stats').innerHTML = `Today: ${parts.join(' · ')}`;
-      $('resume-btn').focus({ preventScroll: true });
+    const cond = this._condition;
+    $('pause-condition').hidden = !cond;
+    if (cond) {
+      const v = Math.max(0, Math.min(100, cond.value));
+      const t = Math.max(0, Math.min(100, cond.target));
+      $('cond-fill').style.width = `${v}%`;
+      $('cond-dot').style.left = `${v}%`;
+      $('cond-target').style.left = `${t}%`;
+      $('cond-val').innerHTML = `<b>${Math.round(v)}</b> → target ${Math.round(t)}`;
     }
+    if (this._dayCardNext) return; // the day card fills the rest
+
+    // Today: always kg, dives and breaches, so a zero reads as "not yet"
+    const st = this.game && this.game.phys ? this.game.phys.stats : null;
+    const n = (v) => `<b>${Math.round(v).toLocaleString()}</b>`;
+    const plural = (v, one, many) => `${n(v)} ${v === 1 ? one : many}`;
+    let line;
+    if (st) {
+      line = st.kg || st.dives || st.breaches || st.lunges
+        ? `${n(st.kg)} kg of krill · ${plural(st.dives, 'dive', 'dives')} · ${plural(st.breaches, 'breach', 'breaches')}`
+        : 'Nothing eaten yet — the day has just begun';
+    } else {
+      line = `${n(this._krill)} krill · ${plural(this._breaches, 'breach', 'breaches')}`;
+    }
+    $('pause-stats').innerHTML = `Today · ${line}`;
+    $('resume-btn').focus({ preventScroll: true });
+    if (this.game) this.map.show(this.game);
+  }
+
+  setPreyCue(on) {
+    this.preyCue = !!on;
+    try { localStorage.setItem(CUE_KEY, on ? '1' : '0'); } catch { /* storage blocked */ }
+    this._renderCueBtn();
+    if (!on) $('prey-cue').classList.remove('on');
+  }
+
+  _renderCueBtn() {
+    const b = $('cue-btn');
+    b.setAttribute('aria-pressed', String(this.preyCue));
+    b.querySelector('.cue-state').textContent = this.preyCue ? 'on' : 'off';
   }
 
   // Kept for API compatibility: dismisses whatever control hint is showing.
@@ -439,22 +522,49 @@ export class UI {
   }
 
   // ---- first-time hints ---------------------------------------------------
-  _showHint(id) {
+  // One line at a time, each shown once per session. Later hints queue behind
+  // the current one; `urgent` ones (air) replace it. `valid` re-checks a
+  // queued hint when its turn comes, so stale advice is dropped.
+  _showHint(id, html = HINTS[id], ms, { urgent = false, valid = null } = {}) {
     if (this._hintsDone.has(id) || !this.game || !this.game.running) return;
+    if (this._hint && this._hint !== id) {
+      if (!urgent) {
+        if (!this._hintQueue.some((q) => q.id === id)) this._hintQueue.push({ id, html, ms, valid });
+        return;
+      }
+      this._endHint(this._hint, false);
+    }
+    this._hintsDone.add(id); // never again this session
     this._hint = id;
     this._hintShownAt = performance.now();
     const el = $('hud-hint');
-    el.innerHTML = HINTS[id];
-    this._show(el, id === 'swim' ? Infinity : 9000);
-    this._hintsDone.add(id); // never again this session
+    el.innerHTML = html;
+    this._show(el, Infinity);
+    clearTimeout(this._hintTimer);
+    const dur = ms !== undefined ? ms : id === 'swim' ? Infinity : 8000;
+    if (dur !== Infinity) this._hintTimer = setTimeout(() => this._endHint(id), dur);
+  }
+
+  _endHint(id, next = true) {
+    if (this._hint !== id) return;
+    this._hint = null;
+    clearTimeout(this._hintTimer);
+    this._hide($('hud-hint'));
+    if (!next) return;
+    // let the fade finish before the next line appears
+    setTimeout(() => {
+      while (!this._hint && this._hintQueue.length) {
+        const q = this._hintQueue.shift();
+        if (this._hintsDone.has(q.id) || (q.valid && !q.valid())) continue;
+        this._showHint(q.id, q.html, q.ms);
+      }
+    }, 900);
   }
 
   _doneHint(id) {
     this._hintsDone.add(id);
-    if (this._hint === id) {
-      this._hint = null;
-      this._hide($('hud-hint'));
-    }
+    this._hintQueue = this._hintQueue.filter((q) => q.id !== id);
+    this._endHint(id);
   }
 
   // ---- per-frame read of game state ----------------------------------------
@@ -493,7 +603,106 @@ export class UI {
     }
     if (this._hint === 'lunge' && c.state.lungeCharge > 0.3) this._doneHint('lunge');
 
+    if (!game.paused) {
+      this._runTime += dt;
+      this._syncOnboarding(game, c);
+    }
+    this._syncPreyCue(game, c);
     this._syncBreach(c);
+  }
+
+  // Contextual first-time lessons: air is a resource, where the food is.
+  _syncOnboarding(game, c) {
+    const phys = game.phys;
+    const underwater = !c.atSurface && c.mode === 'swim';
+    // (a) air: the first time O2 runs below 60 % underwater
+    if (phys && underwater && phys.o2 < 0.6 && !phys.blackout) {
+      this._showHint('air', HINTS.air, 9000, { urgent: true });
+    }
+    if (this._hint === 'air' && c.atSurface) this._doneHint('air');
+    // everything else waits until the player has learned to swim
+    if (!this._hintsDone.has('swim') || this._hint === 'swim') return;
+
+    // (b) food: on the first dive, where the krill layer is right now
+    if (!this._hintsDone.has('food') && (game.depth > 10 || this._runTime > 25) && game._krillY) {
+      const layer = Math.round(-game._krillY() / 5) * 5;
+      const night = game.clock && game.clock.daylight < 0.5;
+      const html = night
+        ? `At night the krill rise toward the surface · look near <b>${layer} m</b>`
+        : `By day the krill hold deep · dive to about <b>${layer} m</b> to find the swarm`;
+      this._showHint('food', html, 9000);
+    }
+
+    // first time a patch is within ~80 m: which way, how far
+    const near = this._nearestPatch(game, c);
+    if (near && near.dist < 80 && !this._hintsDone.has('patch')) {
+      const html = `Krill <b>${this._direction(game.camera, near.center)}</b> · ${Math.round(near.dist)} m`;
+      this._showHint('patch', html, 5000, {
+        valid: () => { const n = this._nearestPatch(game, c); return !!n && n.dist < 120; },
+      });
+    }
+  }
+
+  _nearestPatch(game, c) {
+    const clouds = game.krill && game.krill.krillClouds;
+    if (!clouds || !clouds.length) return null;
+    let best = null;
+    for (const cl of clouds) {
+      const h = cl.homeCenter;
+      const d = Math.hypot(h.x - c.position.x, h.y - c.position.y, h.z - c.position.z);
+      if (!best || d < best.dist) best = { dist: d, center: h };
+    }
+    return best;
+  }
+
+  // Direction to a world point relative to the view, as a word or an arrow.
+  _direction(cam, p) {
+    const v = this._scratch(cam).copy(p).sub(cam.position).transformDirection(cam.matrixWorldInverse);
+    if (v.z > 0.3) return 'behind you';
+    if (Math.hypot(v.x, v.y) < -v.z * 0.35) return 'ahead';
+    const a = Math.atan2(v.x, v.y); // 0 = up, clockwise
+    return ARROWS[(Math.round(a / (Math.PI / 4)) + 8) % 8];
+  }
+
+  _scratch(cam) {
+    if (!this._v) this._v = cam.position.clone();
+    return this._v;
+  }
+
+  // Prey cue: when hungry and the nearest patch is out of reach, a faint
+  // curved hairline shimmers at the screen edge toward it (or under it, if
+  // it is in view but too far to see). Never while airborne or blacked out.
+  _syncPreyCue(game, c) {
+    const el = $('prey-cue');
+    const phys = game.phys;
+    const near = this.preyCue && !game.paused && phys && !phys.blackout && c.mode === 'swim'
+      && phys.stomach < 0.35 && this._nearestPatch(game, c);
+    if (!near || near.dist < 35 || near.dist > 900) {
+      el.classList.remove('on');
+      return;
+    }
+    const cam = game.camera;
+    const W = window.innerWidth, H = window.innerHeight;
+    const v = this._scratch(cam).copy(near.center).project(cam);
+    const behind = v.z > 1;
+    let x = behind ? -v.x : v.x, y = behind ? -v.y : v.y;
+    let px, py, rot;
+    if (!behind && Math.abs(x) < 0.85 && Math.abs(y) < 0.8) {
+      px = ((x + 1) / 2) * W;
+      py = ((1 - y) / 2) * H + 26;
+      rot = 0;
+    } else {
+      // clamp the direction onto an inset ellipse around the screen edge
+      if (Math.abs(x) < 1e-3 && Math.abs(y) < 1e-3) y = -1;
+      const ax = W / 2 - 48, ay = H / 2 - 48;
+      const k = 1 / Math.hypot(x / 1, y / 1);
+      const dx = x * k, dy = -y * k;
+      px = W / 2 + dx * ax;
+      py = H / 2 + dy * ay;
+      rot = Math.atan2(dx, -dy);
+    }
+    el.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px) rotate(${rot.toFixed(3)}rad)`;
+    el.classList.add('on');
   }
 
   _syncBreach(c) {

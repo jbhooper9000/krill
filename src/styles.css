@@ -124,7 +124,7 @@ button {
 
 /* airborne: all HUD fades to 0 (§6.3). Paused: the pause screen speaks. */
 #hud.airborne .hud-el,
-#hud.blackout .hud-el,
+#hud.blackout .hud-el:not(#hud-prompt),
 #hud.paused .hud-el {
   opacity: 0;
 }
@@ -315,11 +315,16 @@ button {
   color: inherit;
 }
 
+/* blackout: the prompt moves into the clear centre of the tunnel */
+#hud.blackout .hud-centre {
+  top: 50%;
+}
+
 /* first-time control hint */
 .hud-hint {
   position: absolute;
   left: 50%;
-  bottom: 84px;
+  bottom: 110px;
   transform: translateX(-50%);
   width: max-content;
   max-width: calc(100% - 2 * var(--gutter));
@@ -356,29 +361,38 @@ button {
 }
 
 
-/* O2 breath arc */
+/* O2 breath arc: centre-low, where the eye already is (review #12) */
 .hud-o2 {
   position: absolute;
-  left: var(--gutter);
-  bottom: calc(var(--gutter) + 34px);
+  left: 50%;
+  bottom: calc(var(--gutter) + 26px);
+  transform: translateX(-50%);
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   line-height: 1;
-  color: rgb(var(--ink) / var(--a-mid));
+  color: rgb(var(--ink) / var(--a-hi));
 }
 
 .o2-label {
+  order: 2;
   font-size: 13px;
+  letter-spacing: 0.04em;
 }
 
 .o2-label sub {
   font-size: 9px;
 }
 
+.o2-label .val {
+  margin-left: 4px;
+  font-size: 11px;
+}
+
 .hud-o2 svg {
-  width: 96px;
-  height: 21px;
+  width: 150px;
+  height: 26px;
   overflow: visible;
   filter: var(--halo-svg);
 }
@@ -387,23 +401,31 @@ button {
   fill: none;
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
 }
 
 .hud-o2 .track {
-  stroke: rgb(var(--ink) / var(--a-track));
+  stroke: rgb(var(--ink) / var(--a-lo));
 }
 
 .hud-o2 .arc {
-  stroke: rgb(var(--ink) / var(--a-mid));
+  stroke: rgb(var(--ink) / var(--a-hi));
+  stroke-width: 2;
   stroke-dasharray: 100 100;
 }
 
+/* below 25 %: unmistakably amber - track, arc and label */
 .hud-o2.low {
-  color: rgb(var(--amber) / var(--a-hi));
+  color: rgb(var(--amber) / 1);
+}
+
+.hud-o2.low .track {
+  stroke: rgb(var(--amber) / 0.4);
 }
 
 .hud-o2.low .arc {
-  stroke: rgb(var(--amber) / var(--a-hi));
+  stroke: rgb(var(--amber) / 1);
+  stroke-width: 2.5;
 }
 
 /* below 30 %: the arc beats at a slowing, diving heart rate (set from JS) */
@@ -416,7 +438,7 @@ button {
   0%,
   40%,
   100% {
-    opacity: 0.7;
+    opacity: 0.8;
   }
   8% {
     opacity: 1;
@@ -804,8 +826,11 @@ button {
 
 .pause {
   display: grid;
-  place-content: center;
-  padding: 32px var(--gutter);
+  place-items: center;
+  padding: 28px var(--gutter);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--ink) / var(--a-lo)) transparent;
 }
 
 /* the one allowed dimming: a radial scrim behind the text block */
@@ -816,9 +841,23 @@ button {
   pointer-events: none;
 }
 
-.pause > :not(.pause-scrim) {
+.pause-scrim {
+  position: fixed;
+}
+
+.pause-layout {
   position: relative;
-  width: min(560px, calc(100vw - 2 * var(--gutter)));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(28px, 4vw, 64px);
+  width: 100%;
+  max-width: 1200px;
+}
+
+.pause-text {
+  width: min(480px, 100%);
+  flex: 0 1 480px;
 }
 
 .pause-head {
@@ -1149,7 +1188,7 @@ button {
   }
 
   .hud-hint {
-    bottom: 96px;
+    bottom: 118px;
   }
 
   .controls-list {
@@ -1180,12 +1219,334 @@ button {
   }
 }
 
-/* ---------- End-of-day card (reuses the pause screen) ---------- */
-#pause-screen.daycard .controls-list { display: none; }
-.day-outcome {
-  margin-top: 14px;
+/* ---------- pause map (design doc 6.5) ---------- */
+.pause-map {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.map-frame {
+  position: relative;
+  width: min(44vw, calc(100vh - 110px), 600px);
+  aspect-ratio: 1;
+}
+
+.map-base,
+.map-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.map-base {
+  filter: drop-shadow(0 0 1px rgba(0, 12, 20, 0.45));
+}
+
+/* feather the map's edges into the ocean: no hard square */
+.map-base,
+.map-overlay {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 9%, #000 91%, transparent),
+    linear-gradient(to bottom, transparent, #000 9%, #000 91%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, transparent, #000 9%, #000 91%, transparent),
+    linear-gradient(to bottom, transparent, #000 9%, #000 91%, transparent);
+  mask-composite: intersect;
+}
+
+.pause-map.empty .map-frame::after {
+  content: 'Charting the bay';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: rgb(var(--ink) / var(--a-lo));
+}
+
+.map-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.map-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: rgb(var(--ink) / var(--a-mid));
+}
+
+.map-label.end {
+  transform: translate(-100%, -50%);
+}
+
+.map-label.start {
+  transform: translate(0, -50%);
+}
+
+.map-label.canyon,
+.map-label.shelf,
+.map-label.slope,
+.map-label.open {
+  font-style: italic;
+  letter-spacing: 0.1em;
+  color: rgb(var(--ink) / var(--a-lo));
+}
+
+.map-label.poi::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  margin-right: 5px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.map-label.here {
+  color: rgb(var(--bio) / var(--a-hi));
+  font-style: normal;
+}
+
+.map-you {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  overflow: visible;
+  filter: drop-shadow(0 0 1px rgba(0, 12, 20, 0.8)) drop-shadow(0 0 6px rgba(0, 12, 20, 0.5));
+}
+
+.map-you path {
+  fill: rgb(var(--bio) / 1);
+}
+
+.map-north {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: rgb(var(--ink) / var(--a-mid));
+}
+
+.map-north svg {
+  width: 10px;
+  height: 18px;
+  overflow: visible;
+}
+
+.map-north path {
+  fill: none;
+  stroke: rgb(var(--ink) / var(--a-mid));
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.map-scalebar {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  right: 10px;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  font-size: 11px;
+  color: rgb(var(--ink) / var(--a-mid));
+  font-variant-numeric: tabular-nums;
+}
+
+.map-scale {
+  height: 5px;
+  border: 1px solid rgb(var(--ink) / var(--a-mid));
+  border-top: 0;
+}
+
+.map-zoom {
+  display: flex;
+  gap: 20px;
+}
+
+.map-zoom .text-btn {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  padding: 4px 0;
+  color: rgb(var(--ink) / var(--a-lo));
+}
+
+.map-zoom .text-btn[aria-pressed='true'] {
+  color: rgb(var(--ink) / var(--a-hi));
+}
+
+.cue-btn {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  margin-left: auto;
+  color: rgb(var(--ink) / var(--a-lo));
+}
+
+/* ---------- end-of-day card (the pause screen with .daycard) ---------- */
+.day-outcome,
+.day-stats {
+  display: none;
+}
+
+.pause.daycard .pause-map,
+.pause.daycard .controls-list,
+.pause.daycard .pause-stats,
+.pause.daycard .cue-btn {
+  display: none;
+}
+
+.pause.daycard .pause-text {
+  flex-basis: 560px;
+  width: min(560px, 100%);
+}
+
+.pause.daycard .day-outcome {
+  display: block;
+  margin: 18px 0 26px;
+  font-size: clamp(22px, 2.6vw, 30px);
   font-weight: 200;
-  font-size: 22px;
-  letter-spacing: 0.04em;
-  color: var(--ink, #eaf6f8);
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+  color: rgb(var(--ink) / var(--a-hi));
+  max-width: 28ch;
+}
+
+.pause.daycard .day-outcome.warn {
+  color: rgb(var(--amber) / var(--a-hi));
+}
+
+.pause.daycard .day-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 22px 16px;
+  margin: 26px 0 8px;
+}
+
+.day-stats div {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 6px;
+}
+
+.day-stats dd {
+  font-size: clamp(28px, 3.2vw, 40px);
+  font-weight: 200;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--ink) / var(--a-hi));
+}
+
+.day-stats dd small {
+  margin-left: 4px;
+  font-size: 13px;
+  color: rgb(var(--ink) / var(--a-mid));
+}
+
+.day-stats dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: rgb(var(--ink) / var(--a-mid));
+}
+
+.day-stats .zero dd {
+  color: rgb(var(--ink) / var(--a-lo));
+}
+
+/* ---------- prey cue (toggle on the pause screen) ---------- */
+.prey-cue {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 120px;
+  height: 40px;
+  margin: -20px 0 0 -60px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 1200ms var(--ease);
+}
+
+.prey-cue.on {
+  opacity: 1;
+}
+
+.prey-cue svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 0 4px rgb(var(--ink) / 0.35)) var(--halo-svg);
+  animation: shimmer 4s ease-in-out infinite;
+}
+
+.prey-cue path {
+  fill: none;
+  stroke: rgb(var(--ink) / 0.45);
+  stroke-width: 1;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+@keyframes shimmer {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prey-cue svg {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+@media (max-width: 900px) {
+  .pause {
+    place-items: start center;
+  }
+
+  .pause-layout {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pause-text {
+    flex-basis: auto;
+    width: 100%;
+  }
+
+  .pause-map {
+    align-items: stretch;
+  }
+
+  .map-frame {
+    width: 100%;
+  }
+
+  .map-zoom {
+    justify-content: flex-end;
+  }
+
+  .pause.daycard .day-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
