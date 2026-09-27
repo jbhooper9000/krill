@@ -341,6 +341,7 @@ const GradeShader = {
     tDiffuse: { value: null },
     uTime: { value: 0 },
     uUnderwater: { value: 1 },
+    uScotopic: { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -353,6 +354,7 @@ const GradeShader = {
     uniform sampler2D tDiffuse;
     uniform float uTime;
     uniform float uUnderwater;
+    uniform float uScotopic;
     varying vec2 vUv;
 
     void main() {
@@ -366,6 +368,9 @@ const GradeShader = {
 
       // underwater footage is slightly desaturated in the mids; air is not
       c = mix( vec3( l ), c, mix( 1.0, 0.92, uUnderwater ) );
+
+      // scotopic vision at high gain: rods see no colour, peak ~500 nm
+      c = mix( c, vec3( l ) * vec3( 0.78, 0.95, 1.12 ), uScotopic );
 
       // lens vignette
       float d = length( ( vUv - 0.5 ) * vec2( 1.0, 0.8 ) );
@@ -439,12 +444,20 @@ export class Effects {
   // of it (in log space) so depth still reads as darker, and stop down in air.
   // Night / dusk: adapt to about half of the (log) drop in surface light, so
   // night stays dark and moody but silhouettes against the surface read.
+  // At night the "camera" goes scotopic: a dark-adapted eye / low-light
+  // sensor gains far more than a photopic grade would (the grade then
+  // desaturates toward blue-grey, see GradeShader), so a moonlit whale at 55 m
+  // is a dim silhouette instead of pure black.
   _targetExposure(y) {
     const light = Math.max(waterData[SLOT_LIGHT * 4 + 3], 1e-3);
-    const adapt = Math.min(16, Math.pow(light, -0.62));
-    if (y >= WATER_LEVEL) return 0.8 * adapt;
+    // night lands at ~light^0.45 of the day look (moonlit ~ 12 %, not day-bright)
+    const adapt = Math.min(20, Math.pow(light, -0.55));
+    if (y >= WATER_LEVEL) return 0.8 * Math.min(12, adapt);
     const depth = WATER_LEVEL - y;
-    return Math.min(6, 1.25 * Math.exp(0.034 * depth)) * adapt;
+    // below the photic layer the eye keeps opening at night (rods), a bit
+    // further than by day, so deep night water is dim rather than black
+    const night = 1 - THREE.MathUtils.smoothstep(light, 0.03, 0.3);
+    return Math.min(6 + 6 * night, 1.25 * Math.exp(0.034 * depth)) * adapt;
   }
 
   /** Snap auto exposure to its target on the next frame (cuts, teleports, tests). */
@@ -466,6 +479,7 @@ export class Effects {
     this.shafts.frame.value = this._frame++ % 256;
     this.grade.uniforms.uTime.value += dt;
     this.grade.uniforms.uUnderwater.value = cam.position.y < WATER_LEVEL ? 1 : 0;
+    this.grade.uniforms.uScotopic.value = 0.65 * THREE.MathUtils.smoothstep(this._exposure, 12, 90);
     this.composer.render(dt);
   }
 }

@@ -565,6 +565,46 @@ const scenarios = {
       if (name) await shot(name);
     }
   },
+  // Playtest 3 lighting checks: caustics on shallow sand (noon, ~12 m of water
+  // off Santa Cruz) and on the whale's back at 10 m; night at 20 / 55 m, follow
+  // cam and looking up (moonlit silhouette + bioluminescent wake). PT_GPU=1.
+  async lighting4() {
+    await hideHud();
+    const setT = (h) => evaljs(`(() => { krill.clock.hours = ${h}; krill.clock.update = () => {}; krill.world.setTimeOfDay(${h}); return 1; })()`);
+    // night first, over the deep canyon at the spawn point (before the origin moves)
+    await setT(23.5);
+    for (const y of [-20, -55]) {
+      for (const kind of ['follow', 'up']) {
+        await evaljs(`(() => { const c = krill.controller; c.position.y = ${y}; const L = c.sp.length;
+          c._updateCamera = function () { const p = this.position; const f = this.forwardVector();
+            if ('${kind}' === 'follow') { this.camera.position.set(p.x - f.x * L * 1.1, p.y + L * 0.12, p.z - f.z * L * 1.1); this.camera.lookAt(p.x + f.x * L, p.y, p.z + f.z * L); }
+            else { this.camera.position.set(p.x + L * 0.5, p.y - L * 0.9, p.z + L * 0.5); this.camera.lookAt(p.x, p.y + L * 2, p.z); } };
+          krill.effects.resetExposure(); return 1; })()`);
+        await key('keyDown', 'KeyW', 'w');
+        await sleep(2500);
+        await key('keyUp', 'KeyW', 'w');
+        await shot(`l4-night-${-y}m-${kind}`);
+      }
+    }
+    await setT(13);
+    // shallow sand: walk from the bay toward the Santa Cruz wharf until the floor is at -12 m
+    const d = await evaljs(`(() => { const t = krill.terrain, c = krill.controller;
+      const [ax, az] = t.project(36.90, -122.00), [bx, bz] = t.project(36.957, -122.017);
+      const L = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / L, uz = (bz - az) / L; let d = 0;
+      while (d < L && t.heightAtAbs(ax + ux * d, az + uz * d) < -12) d += 4;
+      const X = ax + ux * d - t.origin.x, Z = az + uz * d - t.origin.y;
+      c.position.set(X, -6, Z); c.velocity.set(0, 0, 0); c.speed = 0; krill.phys.o2 = 1;
+      c._updateCamera = function () { const p = this.position; this.camera.position.set(p.x + 6, -4, p.z + 10); this.camera.lookAt(p.x - 4, -12, p.z - 6); };
+      return d; })()`);
+    console.log('sand site', d, 'm along the line');
+    await sleep(6000); // terrain tiles stream in
+    await evaljs(`krill.effects.resetExposure(); 1`); await sleep(900);
+    await shot('l4-sand-noon');
+    await evaljs(`(() => { const c = krill.controller; c.position.y = -10; const L = c.sp.length;
+      c._updateCamera = function () { const p = this.position; this.camera.position.set(p.x + L * 0.45, p.y + L * 0.35, p.z + L * 0.2); this.camera.lookAt(p.x, p.y, p.z); };
+      krill.effects.resetExposure(); return 1; })()`);
+    await sleep(900); await shot('l4-back-10m');
+  },
   // Whale readability in Monterey water (playtest 2 N2/N4/#19): default
   // follow distance (1.1 L) and side views at 20 / 55 m, fins at 50 m.
   // Best with PT_GPU=1. Cameras are relative to the whale (floating origin).

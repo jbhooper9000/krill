@@ -172,23 +172,42 @@ float kwCellEdge( vec2 p, float t ) {
 }
 
 // Caustic irradiance multiplier (mean ~1) for a point 'depth' metres below the
-// surface. The pattern lives on the surface and is projected along the
-// refracted key-light direction, so it lands consistently on floor, whale and
-// krill. Caustics need a few metres to focus (weak right under the surface),
-// then defocus (widen, lose contrast) with depth; the peak gain is capped so
-// shallow bodies never show a wireframe "net".
-float kwCaustics( vec3 wp, float depth ) {
-	float amp = KW_CAUST * exp( - depth / 30.0 ) * smoothstep( 0.5, 6.0, depth );
+// surface, with fp = world-space size of the shaded pixel (0 = unfiltered).
+// The pattern lives on the surface and is projected along the refracted
+// key-light direction, so it lands consistently on floor, whale and krill.
+//  * two drifting layers of cell-border filaments (F2 - F1), domain-warped by
+//    a low-frequency swirl so they curve and braid instead of forming a
+//    straight-edged polygon net;
+//  * soft-cored filaments (Gaussian width ~0.16 cell) with dark interiors;
+//    crossings of the two layers are the brightest points;
+//  * cells grow and filaments blur / lose contrast with depth (the focusing
+//    wave field is seen from farther away);
+//  * screen-space filtering: when the pixel footprint approaches the filament
+//    width the pattern widens and fades to its mean, so it never aliases or
+//    grids at distance.
+float kwCaustics( vec3 wp, float depth, float fp ) {
+	float amp = KW_CAUST * exp( - depth / 30.0 ) * smoothstep( 0.5, 5.0, depth );
 	if ( amp < 0.003 ) return 1.0;
-	vec2 q = ( wp.xz + KW_SUNW.xz * ( depth / max( KW_SUNW.y, 0.3 ) ) ) * KW_CSCALE;
+	float scale = KW_CSCALE / ( 1.0 + depth * 0.035 );
+	vec2 q = ( wp.xz + KW_SUNW.xz * ( depth / max( KW_SUNW.y, 0.3 ) ) ) * scale;
+	float fq = fp * scale;                       // pixel footprint in cell units
+	if ( fq > 0.9 ) return 1.0;                  // far away: just the mean
 	float t = KW_TIME;
-	float w = 0.07 + depth * 0.005;
-	float e1 = kwCellEdge( q + vec2( 0.11, 0.05 ) * t, t * 0.65 );
-	float e2 = kwCellEdge( q * 1.43 + vec2( 3.7, 9.1 ) - vec2( 0.07, 0.12 ) * t, t * 0.8 + 2.0 );
+	vec2 warp = vec2(
+		sin( q.y * 0.9 + t * 0.35 ) + 0.5 * sin( q.y * 2.1 - q.x * 0.7 + t * 0.5 ),
+		sin( q.x * 1.1 - t * 0.3 ) + 0.5 * sin( q.x * 1.9 + q.y * 0.8 - t * 0.45 ) );
+	q += warp * 0.24;
+	float w0 = 0.13 + depth * 0.006;
+	float w = sqrt( w0 * w0 + 0.6 * fq * fq );
+	float e1 = kwCellEdge( q + vec2( 0.11, 0.05 ) * t, t * 0.55 );
+	float e2 = kwCellEdge( q * 1.37 + vec2( 3.7, 9.1 ) - vec2( 0.07, 0.12 ) * t, t * 0.7 + 2.0 );
 	float iw = 1.0 / ( w * w );
-	float l = exp( - e1 * e1 * iw ) + exp( - e2 * e2 * iw );
-	float mean = min( 1.6, 4.3 * w );
-	return max( 0.0, mix( 1.0, min( l / mean, 3.2 ), amp ) );
+	float l1 = exp( - e1 * e1 * iw );
+	float l2 = exp( - e2 * e2 * iw );
+	float l = 0.55 * ( l1 + l2 ) + 0.9 * l1 * l2;
+	float mean = min( 0.9, 2.3 * w + 0.02 );
+	amp *= ( w0 / w ) * ( 1.0 - smoothstep( 0.4, 0.9, fq ) );
+	return max( 0.0, mix( 1.0, min( l / mean, 3.0 ), amp ) );
 }
 
 // The artistic floor has the SAME spectral shape as the real light at that
@@ -217,12 +236,14 @@ vec3 kwAmbientTransmitSpec( vec3 wp ) {
 }
 
 // Direct key light arriving at wp: slant-path attenuation * projected caustics.
-vec3 kwSunTransmit( vec3 wp ) {
+// fp = world-space pixel footprint (fragment shaders: length( fwidth( wp ) )).
+vec3 kwSunTransmitF( vec3 wp, float fp ) {
 	float depth = KW_LEVEL - wp.y;
 	if ( depth <= 0.0 ) return vec3( 1.0 );
 	vec3 T = exp( - kwTauDown( - depth ) / max( KW_SUNW.y, 0.3 ) );
-	return T * ( KW_KEYT * kwCaustics( wp, depth ) );
+	return T * ( KW_KEYT * kwCaustics( wp, depth, fp ) );
 }
+vec3 kwSunTransmit( vec3 wp ) { return kwSunTransmitF( wp, 0.0 ); }
 
 float kwPhase( float cosT, float g ) {
 	float g2 = g * g;
@@ -530,7 +551,7 @@ export function installWaterShading() {
       anchorView,
       `${anchorView}
 #ifdef USE_FOG
-	vec3 kwSunT = kwSunTransmit( vKwWorld );
+	vec3 kwSunT = kwSunTransmitF( vKwWorld, length( fwidth( vKwWorld ) ) );
 	vec3 kwAmbT = kwAmbientTransmit( vKwWorld );
 	vec3 kwAmbTS = kwAmbientTransmitSpec( vKwWorld );
 	vec3 kwSunV = normalize( ( viewMatrix * vec4( KW_SUNW, 0.0 ) ).xyz );
