@@ -5,7 +5,13 @@
 //
 // scenarios: play (swim/turn/lunge/glide), side (side-on camera sequence),
 //            feed (swim through a krill cloud), shots (static views: behind,
-//            side, above-surface, looking up, deep)
+//            side, above-surface, looking up, deep), above (camera above the
+//            surface: breach views, horizon, straddling the waterline),
+//            breach, breathe (blackout -> recovery), blow (spouts),
+//            menu (species select over the live ocean, no autostart; also a
+//            narrow-window shot), hud (HUD states over bright + dark water,
+//            breach ready, denial, O2 veil), pause (pause screen),
+//            tune (tuning panel)
 // Headless Chrome renders with SwiftShader (software), so expect ~5-10 fps —
 // game time (dt clamped to 0.05) runs slower than wall time.
 import { spawn } from 'node:child_process';
@@ -39,7 +45,9 @@ const server = spawn(process.execPath, [path.join(root, 'serve.js')], {
 });
 const browser = spawn(chrome, [
   '--headless=new', `--remote-debugging-port=${cdpPort}`, '--window-size=1280,720',
-  '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
+  // PT_GPU=1 renders on the real GPU (for perf numbers) instead of SwiftShader
+  ...(process.env.PT_GPU ? ['--use-angle=d3d11', '--enable-gpu'] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']),
+  '--ignore-gpu-blocklist',
   `--user-data-dir=${path.join(out, '.chrome-profile')}`, 'about:blank',
 ], { stdio: 'ignore' });
 
@@ -82,9 +90,107 @@ const fps = () => evaljs(`new Promise(r => { let n=0; const t0=performance.now()
 // Pin the camera relative to the whale: offsets are in whale lengths.
 const pinCamera = (ox, oy, oz, lookUp = 0) => evaljs(`krill.controller._updateCamera = function(){ const p=this.position; const L=this.sp.length;
   this.camera.position.set(p.x + L*${ox}, p.y + L*${oy}, p.z + L*${oz}); this.camera.lookAt(p.x, p.y + L*${lookUp}, p.z); }; 1`);
+const keyTap = async (code, k, ms = 120) => { await key('keyDown', code, k); await sleep(ms); await key('keyUp', code, k); };
+const viewport = (width, height) => send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+// HUD element opacities, to check the idle/visible logic without eyeballing
+const hudState = () => evaljs(`(() => { const o = {}; for (const el of document.querySelectorAll('.hud-el'))
+  o[el.id] = +getComputedStyle(el).opacity; o.body = document.body.className; o.hud = document.getElementById('hud').className;
+  o.prompt = document.getElementById('hud-prompt').textContent; o.hint = document.getElementById('hud-hint').textContent; o.camY = +krill.camera.position.y.toFixed(2); return o; })()`);
 const hideHud = () => evaljs(`document.getElementById('hud').style.display='none'; 1`);
 
+const noAutostart = new Set(['menu']);
 const scenarios = {
+  async menu() {
+    await shot('menu');
+    await keyTap('ArrowRight', 'ArrowRight');
+    await sleep(2500);
+    await shot('menu-next');
+    await keyTap('ArrowLeft', 'ArrowLeft');
+    await sleep(1500);
+    await viewport(480, 820);
+    await sleep(1500);
+    await shot('menu-narrow');
+    await viewport(1280, 720);
+    await keyTap('Enter', 'Enter');
+    await sleep(2500);
+    console.log('after enter', JSON.stringify({ running: await evaljs('krill.running'), hud: await hudState() }));
+    await shot('menu-dived');
+  },
+  async hud() {
+    await sleep(600);
+    console.log('start', JSON.stringify(await hudState()));
+    await shot('hud-0-start');
+    await key('keyDown', 'KeyW', 'w');
+    await sleep(2500);
+    // bright water near the surface, part-charged surge, lunge charging, depth moving
+    await evaljs(`(() => { krill.surge = 0.62; const c = krill.controller; c.position.y = -3; c._aimPitchTarget = 0.35; return 1; })()`);
+    await sleep(1200);
+    await mouse('mousePressed', 640, 360, 'right'); await sleep(700);
+    console.log('bright', JSON.stringify(await hudState()));
+    await shot('hud-1-bright');
+    await mouse('mouseReleased', 640, 360, 'right');
+    await sleep(300);
+    await shot('hud-1b-lunge-burst');
+    // dark water near the floor, diving
+    await evaljs(`(() => { const c = krill.controller; c.position.y = c.bounds.minY + 6; c._aimPitchTarget = -0.5; return 1; })()`);
+    await sleep(1500);
+    console.log('dark', JSON.stringify(await hudState()));
+    await shot('hud-2-dark');
+    // breach ready inside the window
+    await evaljs(`(() => { const c = krill.controller; c._aimPitchTarget = 0; c.position.y = -2 * c.sp.length; krill.surge = 1; return 1; })()`);
+    await sleep(1500);
+    console.log('ready', JSON.stringify(await hudState()));
+    await shot('hud-3-breach-ready');
+    // denial: too shallow
+    await evaljs(`(() => { const c = krill.controller; c.position.y = -0.4 * c.sp.length; return 1; })()`);
+    await sleep(900);
+    await keyTap('KeyF', 'f');
+    await sleep(500);
+    console.log('denied', JSON.stringify(await hudState()));
+    await shot('hud-4-denied');
+    // post-breach toast (text as Game.js formats it)
+    await evaljs(`krill.ui.toast('Breach · 82% clear · twist 150°'); 1`);
+    await sleep(600);
+    await shot('hud-5-toast');
+    // O2: low (veil + amber arc), then blackout
+    await evaljs(`krill.ui.setO2(0.2, { atSurface: false }); 1`);
+    await sleep(900);
+    await shot('hud-6-o2-low');
+    await evaljs(`krill.ui.setO2(0.02, { blackout: true }); 1`);
+    await sleep(900);
+    await shot('hud-7-blackout');
+    await evaljs(`krill.ui.setO2(1, {}); 1`);
+    await key('keyUp', 'KeyW', 'w');
+    await viewport(480, 820);
+    await evaljs(`(() => { const c = krill.controller; c.position.y = -2 * c.sp.length; krill.ui.toast('Breach · 82% clear · twist 150°'); return 1; })()`);
+    await sleep(1200);
+    await shot('hud-8-narrow');
+    await viewport(1280, 720);
+  },
+  async tune() {
+    await sleep(800);
+    await keyTap('KeyT', 't');
+    await sleep(1200);
+    await shot('tune');
+    await keyTap('KeyT', 't');
+  },
+  async pause() {
+    await key('keyDown', 'KeyW', 'w');
+    await sleep(1500);
+    await key('keyUp', 'KeyW', 'w');
+    await evaljs(`krill.ui.setCondition(58, 75); krill.ui.setClock(14, 32); 1`);
+    await keyTap('Escape', 'Escape');
+    await sleep(1200);
+    console.log('paused', await evaljs('krill.paused'));
+    await shot('pause');
+    await viewport(480, 820);
+    await sleep(800);
+    await shot('pause-narrow');
+    await viewport(1280, 720);
+    await keyTap('Enter', 'Enter');
+    await sleep(600);
+    console.log('resumed', !(await evaljs('krill.paused')));
+  },
   async play() {
     console.log('t0', JSON.stringify(await sample()));
     await shot('play-0-idle');
@@ -140,7 +246,7 @@ const scenarios = {
       const s = await evaljs(`(() => { const c = krill.controller; return { mode: c.mode, y: +c.position.y.toFixed(2),
         vy: +c.velocity.y.toFixed(2), pitch: +c.pitch.toFixed(2), roll: +c.roll.toFixed(2), speed: +c.speed.toFixed(1),
         runup: c._runup, ts: +c.timeScale.toFixed(2), surge: +krill.surge.toFixed(2), breaches: krill.breaches,
-        toast: document.getElementById('toast').textContent, hint: document.getElementById('breach-hint').textContent,
+        toast: document.getElementById('toast').textContent, prompt: document.getElementById('hud-prompt').textContent, hud: document.getElementById('hud').className, body: document.body.className, camY: +krill.camera.position.y.toFixed(1),
         spray: krill.splash.spray.alpha.reduce((a, v) => a + (v > 0), 0),
         bubbles: krill.splash.bubbles.alpha.reduce((a, v) => a + (v > 0), 0) }; })()`);
       console.log('breach', JSON.stringify(s));
@@ -158,8 +264,8 @@ const scenarios = {
       await sleep(400);
       const s = await evaljs(`(() => { const c = krill.controller, p = krill.phys; return { y: +c.position.y.toFixed(1),
         pitch: +c.pitch.toFixed(2), o2: +p.o2.toFixed(2), blackout: p.blackout, atSurface: c.atSurface,
-        cond: +p.condition.toFixed(1), dives: p.stats.dives, hint: document.getElementById('growth-hint').textContent,
-        prompt: document.getElementById('breach-hint').textContent }; })()`);
+        cond: +p.condition.toFixed(1), dives: p.stats.dives, veil: document.getElementById('o2-veil')?.className,
+        prompt: document.getElementById('hud-prompt').textContent }; })()`);
       console.log('breathe', JSON.stringify(s));
       if (n === 30) await shot('breathe-surface');
     }
@@ -168,12 +274,12 @@ const scenarios = {
   async blow() {
     await hideHud();
     await evaljs(`(() => { const c = krill.controller; c.position.set(0, c.bounds.maxY, 0); krill.phys.o2 = 0.3; return 1; })()`);
-    await pinCamera(1.3, 0.25, 1.0, 0.3);
+    await pinCamera(0.5, 0.15, 0.9, 0.35);
     for (let n = 0; n < 12; n++) {
       await sleep(300);
       const s = await evaljs(`({ o2: +krill.phys.o2.toFixed(2), atSurface: krill.controller.atSurface, spray: krill.splash.spray.alpha.reduce((a, v) => a + (v > 0), 0) })`);
       console.log('blow', JSON.stringify(s));
-      if (s.spray > 150 && n % 3 === 0) await shot(`blow-${n}`);
+      if (s.spray > 100) await shot(`blow-${n}`);
     }
   },
   async shots() {
@@ -294,6 +400,27 @@ const scenarios = {
     console.log(JSON.stringify(await info('top-down')));
     await shot('terrain-6-topdown');
   },
+  // Scripted steps for debugging: PT_STEPS='[["js expr", "shotName"], ...]'
+  // (shotName may be null; each step waits 900 ms before the shot).
+  async steps() {
+    await hideHud();
+    for (const [js, name] of JSON.parse(process.env.PT_STEPS || '[]')) {
+      if (js) console.log('eval', JSON.stringify(await evaljs(js)));
+      await sleep(900);
+      if (name) await shot(name);
+    }
+  },
+  // Camera above the water (breach views): pinned at an absolute height.
+  async above() {
+    await hideHud();
+    await evaljs(`krill.controller.position.y = -3; 1`); // clamped to bounds.maxY
+    const pinAbs = (ox, y, oz, lookY, lookFwd = 0) => evaljs(`krill.controller._updateCamera = function(){ const p=this.position; const L=this.sp.length;
+      this.camera.position.set(p.x + L*${ox}, ${y}, p.z + L*${oz}); this.camera.lookAt(p.x, ${lookY === null ? 'p.y' : lookY}, p.z - L*${lookFwd}); }; 1`);
+    await pinAbs(0.9, 3, 0.9, null); await sleep(900); await shot('above');
+    await pinAbs(0.2, 3, 1.6, 1.5, 3); await sleep(900); await shot('above-horizon');
+    await pinAbs(0.3, 0.04, 1.4, 0.0, 2); await sleep(900); await shot('above-waterline');
+    await pinAbs(0.3, -0.5, 1.4, 1.0, 2); await sleep(900); await shot('above-just-below');
+  },
 };
 
 try {
@@ -321,12 +448,13 @@ try {
   };
   await send('Runtime.enable');
   await send('Page.enable');
-  await send('Page.navigate', { url: `http://localhost:${port}/?autostart=${species}` });
+  const query = noAutostart.has(scenario) ? `?test&species=${species}` : `?autostart=${species}`;
+  await send('Page.navigate', { url: `http://localhost:${port}/${query}` });
   await sleep(4000);
   if (!scenarios[scenario]) throw new Error(`unknown scenario ${scenario}`);
   await scenarios[scenario]();
   console.log('fps (software render)', await fps());
-  console.log('final', JSON.stringify(await sample()));
+  if (await evaljs('krill.running')) console.log('final', JSON.stringify(await sample()));
 } catch (e) {
   console.error('PLAYTEST ERROR', e.message);
   process.exitCode = 1;

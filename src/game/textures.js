@@ -95,7 +95,7 @@ export function makeSkinTexture(topColor, bottomColor, mottle = true, seed = 1) 
 export function makeSandTexture() {
   const size = 512;
   const c = canvas(size, (ctx, s) => {
-    ctx.fillStyle = '#4a3f30';
+    ctx.fillStyle = '#7d6f56'; // sand albedo ~0.2-0.3 linear
     ctx.fillRect(0, 0, s, s);
     let r = 7;
     const rand = () => {
@@ -245,4 +245,110 @@ export function makeFishTexture() {
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
+}
+
+// --- Tileable fbm value noise (single channel in RGBA8) --------------------
+// Used by the volumetric light-shaft pass: sampled in world XZ (projected along
+// the sun direction) it gives the slowly drifting pattern of lit / shadowed
+// columns that the wavy surface throws into the water.
+export function makeTileableNoiseTexture(size = 256, period = 8, octaves = 4, seed = 1) {
+  let s = seed * 7919 + 13;
+  const rand = () => {
+    s = (s * 16807) % 2147483647;
+    return s / 2147483647;
+  };
+  const maxP = period << (octaves - 1);
+  const lattice = new Float32Array(maxP * maxP);
+  for (let i = 0; i < lattice.length; i++) lattice[i] = rand();
+  const fade = (t) => t * t * (3 - 2 * t);
+  const sample = (x, y, p) => {
+    // lattice of size p x p (wrapping), reading a sub-grid of the big lattice
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const fx = fade(x - x0), fy = fade(y - y0);
+    const L = (ix, iy) => lattice[((iy % p + p) % p) * maxP + ((ix % p + p) % p)];
+    const a = L(x0, y0), b = L(x0 + 1, y0), c = L(x0, y0 + 1), d = L(x0 + 1, y0 + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  };
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let v = 0, amp = 0.5, norm = 0, p = period;
+      for (let o = 0; o < octaves; o++) {
+        v += amp * sample((x / size) * p, (y / size) * p, p);
+        norm += amp;
+        amp *= 0.5;
+        p *= 2;
+      }
+      const b = Math.round((v / norm) * 255);
+      const i = (y * size + x) * 4;
+      data[i] = data[i + 1] = data[i + 2] = b;
+      data[i + 3] = 255;
+    }
+  }
+  const t = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.generateMipmaps = true;
+  t.needsUpdate = true;
+  return t;
+}
+
+// --- HDR underwater environment (radiance vs. elevation) -------------------
+// A half-float cube map of the light field just below the surface: the bright
+// Snell's window straight up (sky compressed into a ~48.6 deg cone), the
+// dimmer totally-internally-reflecting ring, water-coloured horizon and a dark
+// upwelling floor. three pre-filters it with PMREM for image-based lighting,
+// which gives soft, physically plausible ambient + reflections (silvery fish,
+// the whale's wet sheen). WaterMedium attenuates it with the depth of each
+// shaded point, so one environment serves every depth.
+export function makeUnderwaterEnvCube({ window: win, horizon, deep, size = 32 } = {}) {
+  const cosWin = Math.cos((48.6 * Math.PI) / 180);
+  const radiance = (dy, out) => {
+    if (dy > cosWin) {
+      const k = THREE.MathUtils.smoothstep(dy, cosWin, cosWin + 0.1);
+      for (let c = 0; c < 3; c++) out[c] = horizon[c] * 1.8 + (win[c] - horizon[c] * 1.8) * k;
+    } else if (dy >= 0) {
+      const k = dy / cosWin;
+      for (let c = 0; c < 3; c++) out[c] = horizon[c] * (1 + 0.8 * k * k);
+    } else {
+      const k = Math.sqrt(-dy);
+      for (let c = 0; c < 3; c++) out[c] = horizon[c] + (deep[c] - horizon[c]) * k;
+    }
+  };
+  const toHalf = THREE.DataUtils.toHalfFloat;
+  const faces = [];
+  const rgb = [0, 0, 0];
+  for (let f = 0; f < 6; f++) {
+    const data = new Uint16Array(size * size * 4);
+    for (let j = 0; j < size; j++) {
+      for (let i = 0; i < size; i++) {
+        const u = ((i + 0.5) / size) * 2 - 1;
+        const v = ((j + 0.5) / size) * 2 - 1;
+        // radially symmetric about +Y, so only the vertical component matters
+        let dy;
+        if (f === 2) dy = 1 / Math.hypot(1, u, v); // +Y
+        else if (f === 3) dy = -1 / Math.hypot(1, u, v); // -Y
+        else dy = -v / Math.hypot(1, u, v); // side faces: row 0 is up
+        radiance(dy, rgb);
+        const o = (j * size + i) * 4;
+        data[o] = toHalf(rgb[0]);
+        data[o + 1] = toHalf(rgb[1]);
+        data[o + 2] = toHalf(rgb[2]);
+        data[o + 3] = toHalf(1);
+      }
+    }
+    const face = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.HalfFloatType);
+    face.needsUpdate = true;
+    faces.push(face);
+  }
+  const cube = new THREE.CubeTexture(faces);
+  cube.type = THREE.HalfFloatType;
+  cube.format = THREE.RGBAFormat;
+  cube.colorSpace = THREE.LinearSRGBColorSpace;
+  cube.minFilter = THREE.LinearFilter;
+  cube.magFilter = THREE.LinearFilter;
+  cube.generateMipmaps = false;
+  cube.needsUpdate = true;
+  return cube;
 }
