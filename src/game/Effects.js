@@ -5,7 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
-import { WATER_GLSL, waterUniform, WATER_LEVEL } from './WaterMedium.js';
+import { WATER_GLSL, waterUniform, waterData, WATER_LEVEL, SLOT_LIGHT } from './WaterMedium.js';
 import { makeTileableNoiseTexture } from './textures.js';
 
 // -----------------------------------------------------------------------------
@@ -106,10 +106,12 @@ const ShaftShader = {
           float t = t0 + ( float( i ) + j ) * dt;
           vec3 p = ro + dir * t;
           float depth = max( KW_LEVEL - p.y, 0.0 );
-          vec3 sunT = exp( - KW_KD * depth / max( KW_SUNW.y, 0.3 ) );
-          vec3 viewT = exp( - KW_EXT * ( t - t0 ) );
-          // shafts need a little distance below the surface to form
-          float form = smoothstep( 0.0, 3.0, depth );
+          vec3 sunT = KW_KEYT * exp( - kwTauDown( - depth ) / max( KW_SUNW.y, 0.3 ) );
+          float ys = ro.y + dir.y * t0 - KW_LEVEL;
+          vec3 viewT = exp( - ( KW_EXT + KW_DEXT * kwLayerMean( ys, - depth ) ) * ( t - t0 ) );
+          // shafts need a little distance below the surface to form; the
+          // plankton layer scatters much more (milky forward-scatter haze)
+          float form = smoothstep( 0.0, 3.0, depth ) * ( 1.0 + 2.2 * kwLayer( - depth ) );
           acc += beam( p, depth ) * form * sunT * viewT;
         }
         acc *= dt;
@@ -125,9 +127,11 @@ const ShaftShader = {
       vec4 nn = uInvProj * vec4( vUv * 2.0 - 1.0, - 1.0, 1.0 );
       nn /= nn.w;
       vec3 nearW = ( uCamWorld * vec4( nn.xyz, 1.0 ) ).xyz;
-      float lineW = fwidth( nearW.y ) * 2.5;
-      float men = 1.0 - smoothstep( 0.0, lineW, abs( nearW.y - KW_LEVEL ) );
-      col *= 1.0 - 0.6 * men;
+      float px = fwidth( nearW.y );
+      float dy = abs( nearW.y - KW_LEVEL );
+      float men = 1.0 - smoothstep( 0.0, px * 1.5, dy );          // thin core
+      float film = 1.0 - smoothstep( 0.0, px * 9.0, dy );         // soft water film
+      col *= ( 1.0 - 0.35 * men ) * ( 1.0 - 0.12 * film );
 
       gl_FragColor = vec4( col * uExposure, base.a );
     }
@@ -242,10 +246,19 @@ export class Effects {
   // Auto exposure, the way a camera operator rides the iris on a dive: the
   // light field falls off as ~exp(-Kd_green * depth); we compensate about half
   // of it (in log space) so depth still reads as darker, and stop down in air.
+  // Night / dusk: adapt to about half of the (log) drop in surface light, so
+  // night stays dark and moody but silhouettes against the surface read.
   _targetExposure(y) {
-    if (y >= WATER_LEVEL) return 0.8;
+    const light = Math.max(waterData[SLOT_LIGHT * 4 + 3], 1e-3);
+    const adapt = Math.min(16, Math.pow(light, -0.62));
+    if (y >= WATER_LEVEL) return 0.8 * adapt;
     const depth = WATER_LEVEL - y;
-    return Math.min(6, 1.25 * Math.exp(0.034 * depth));
+    return Math.min(6, 1.25 * Math.exp(0.034 * depth)) * adapt;
+  }
+
+  /** Snap auto exposure to its target on the next frame (cuts, teleports, tests). */
+  resetExposure() {
+    this._exposure = null;
   }
 
   render(dt) {

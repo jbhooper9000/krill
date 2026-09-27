@@ -67,19 +67,38 @@ export class Whale {
     // dielectric base, a faint low-intensity clearcoat for the film and a
     // little sheen for the soft grazing-angle lift seen in footage. Under water
     // the environment is diffuse, so the resulting specular is broad and soft.
-    return new THREE.MeshPhysicalMaterial({
+    // Above the water (breach, logging at the surface) the skin is sheeting
+    // wet: per fragment we raise the clearcoat and drop its roughness when the
+    // point is in air, giving crisp sun highlights and sky reflections. Sheen
+    // is kept low: at depth its grazing lift made fin edges glow.
+    const mat = new THREE.MeshPhysicalMaterial({
       map,
       color: 0xffffff,
       roughness: 0.66,
       metalness: 0,
       clearcoat: 0.12,
       clearcoatRoughness: 0.5,
-      sheen: 0.35,
+      sheen: 0.15,
       sheenRoughness: 0.6,
       sheenColor: new THREE.Color(0x7f98a4),
       envMapIntensity: 0.9,
       side: THREE.DoubleSide,
     });
+    mat.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <lights_physical_fragment>',
+        /* glsl */ `#include <lights_physical_fragment>
+	#ifdef USE_FOG
+	{
+		float kwAir = smoothstep( - 0.05, 0.15, vKwWorld.y - KW_LEVEL );
+		material.clearcoat = mix( material.clearcoat, 0.85, kwAir );
+		material.clearcoatRoughness = mix( material.clearcoatRoughness, 0.1, kwAir );
+		material.roughness = mix( material.roughness, 0.5, kwAir );
+	}
+	#endif`
+      );
+    };
+    return mat;
   }
 
   // ---- construction ------------------------------------------------------

@@ -17,7 +17,9 @@ export const TUNABLES = [
   { id: 'breachSlowmo', label: 'Breach slow-mo (0/1)', min: 0, max: 1, step: 1, value: 1 },
   // game seconds per real second for the time of day (36 -> a day in 40 min)
   { id: 'timeCompression', label: 'Time compression', min: 1, max: 240, step: 1, value: 36 },
-  { id: 'regrowHours', label: 'Swarm regrow (game h)', min: 0.25, max: 12, step: 0.25, value: 2 },
+  // a 1,500-krill patch regrowing over 12 game h = 1.25 krill/s, well under a
+  // whale's ~4.7/s intake, so patches really deplete and you must move on
+  { id: 'regrowHours', label: 'Swarm regrow (game h)', min: 0.25, max: 48, step: 0.25, value: 12 },
 ];
 
 export const TUNING = {};
