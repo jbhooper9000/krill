@@ -70,6 +70,44 @@ function inBall(r, rand, out, i) {
   out[i] = x * r; out[i + 1] = y * r; out[i + 2] = z * r;
 }
 
+
+// Tileable 3D value-noise texture (32^3 RGBA8, 8 lattice cells per tile):
+// rgb = three independent smooth noises (domain warp), a = a fourth (density
+// detail). Replaces per-fragment procedural noise in the volume (3 fetches
+// instead of ~40 hashes per slice fragment).
+let _noise3D = null;
+function getNoise3D() {
+  if (_noise3D) return _noise3D;
+  const N = 32, L = 8, rand = rng(4242);
+  const lat = new Float32Array(L * L * L * 4);
+  for (let i = 0; i < lat.length; i++) lat[i] = rand();
+  const data = new Uint8Array(N * N * N * 4);
+  const sm = (t) => t * t * (3 - 2 * t);
+  for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const fx = (x / N) * L, fy = (y / N) * L, fz = (z / N) * L;
+    const ix = Math.floor(fx), iy = Math.floor(fy), iz = Math.floor(fz);
+    const tx = sm(fx - ix), ty = sm(fy - iy), tz = sm(fz - iz);
+    for (let c = 0; c < 4; c++) {
+      const g = (a, b, d) => lat[((((a % L) + ((b % L) * L) + ((d % L) * L * L)) * 4) + c)];
+      const v00 = g(ix, iy, iz) + (g(ix + 1, iy, iz) - g(ix, iy, iz)) * tx;
+      const v10 = g(ix, iy + 1, iz) + (g(ix + 1, iy + 1, iz) - g(ix, iy + 1, iz)) * tx;
+      const v01 = g(ix, iy, iz + 1) + (g(ix + 1, iy, iz + 1) - g(ix, iy, iz + 1)) * tx;
+      const v11 = g(ix, iy + 1, iz + 1) + (g(ix + 1, iy + 1, iz + 1) - g(ix, iy + 1, iz + 1)) * tx;
+      const v0 = v00 + (v10 - v00) * ty, v1 = v01 + (v11 - v01) * ty;
+      data[(x + y * N + z * N * N) * 4 + c] = Math.round((v0 + (v1 - v0) * tz) * 255);
+    }
+  }
+  const t = new THREE.Data3DTexture(data, N, N, N);
+  t.format = THREE.RGBAFormat;
+  t.type = THREE.UnsignedByteType;
+  t.minFilter = t.magFilter = THREE.LinearFilter;
+  t.wrapS = t.wrapT = t.wrapR = THREE.RepeatWrapping;
+  t.unpackAlignment = 1;
+  t.needsUpdate = true;
+  _noise3D = t;
+  return t;
+}
+
 // ---- GLSL ----------------------------------------------------------------------
 const BOID_GLSL = /* glsl */ `
 uniform sampler2D uBoids;       // row 0: pos.xyz, alive ; row 1: vel.xyz, phase
@@ -174,7 +212,7 @@ const DENS_MAX = 1.0; // boids/m^3 mapped to 1.0 in the grid
 // animals): the core holds ~0.5 boids/m^3 -> sigma ~0.1/m (≈ 3,000 krill/m^3
 // × 0.3 cm² each), so light through a 25 m patch is cut to ~10%
 const SIGMA_PER_BOID = 0.3;
-const SLICES = 40;
+const SLICES = 32;
 const INFLATE = 1.3;
 
 const volumeVert = /* glsl */ `
@@ -199,7 +237,7 @@ void main() {
 	float t = depth - d0;
 	float r = sqrt( max( uRadius * uRadius - t * t, 0.0 ) ) * 1.02;
 	vec4 mvPosition = vec4( cv.xy + corner * r, - depth, 1.0 );
-	if ( d1 < nearD || r <= 0.0 ) mvPosition = vec4( 0.0, 0.0, 1.0, 1.0 ); // behind: collapse
+	if ( d1 < nearD || r <= 0.0 || aSlice >= uSlices ) mvPosition = vec4( 0.0, 0.0, 1.0, 1.0 ); // behind / unused: collapse
 	vThick = thick;
 	gl_Position = projectionMatrix * mvPosition;
 	vRayDir = ( vec4( normalize( mvPosition.xyz ), 0.0 ) * viewMatrix ).xyz;
@@ -225,12 +263,7 @@ varying float vThick;
 varying vec3 vRayDir;
 #include <fog_pars_fragment>
 ${LIGHT_GLSL}
-float vHash( vec3 p ) { p = fract( p * 0.3183099 + 0.1 ); p *= 17.0; return fract( p.x * p.y * p.z * ( p.x + p.y + p.z ) ); }
-float vNoise( vec3 x ) {
-	vec3 i = floor( x ); vec3 f = fract( x ); f = f * f * ( 3.0 - 2.0 * f );
-	return mix( mix( mix( vHash( i ), vHash( i + vec3( 1, 0, 0 ) ), f.x ), mix( vHash( i + vec3( 0, 1, 0 ) ), vHash( i + vec3( 1, 1, 0 ) ), f.x ), f.y ),
-		mix( mix( vHash( i + vec3( 0, 0, 1 ) ), vHash( i + vec3( 1, 0, 1 ) ), f.x ), mix( vHash( i + vec3( 0, 1, 1 ) ), vHash( i + vec3( 1, 1, 1 ) ), f.x ), f.y ), f.z );
-}
+uniform sampler3D uNoise; // tileable, 8 lattice cells per unit
 void main() {
 	vec3 dir = normalize( vRayDir );
 	// dither along the ray inside this slab (hides slicing)
@@ -242,7 +275,7 @@ void main() {
 	// ragged, sheet- and plume-like. Low-frequency warping of the lookup turns
 	// the flock's faces into billows without moving the mass.
 	vec3 wq = p * 0.07 + vec3( 0.0, uTime * 0.012, 0.0 );
-	vec3 warp = vec3( vNoise( wq ), vNoise( wq + vec3( 5.2, 1.3, 2.8 ) ), vNoise( wq + vec3( 1.7, 9.2, 4.1 ) ) ) - 0.5;
+	vec3 warp = texture( uNoise, wq * 0.125 ).rgb - 0.5;
 	vec3 uvw0 = ( p - uBoxMin - 0.5 * uBoxSize ) / ( uBoxSize * uInflate ) + 0.5;
 	if ( any( lessThan( uvw0, vec3( 0.0 ) ) ) || any( greaterThan( uvw0, vec3( 1.0 ) ) ) ) discard;
 	// the density field is drawn ~1.3x the flock's extent: the boids are the
@@ -253,8 +286,8 @@ void main() {
 	// cut the blur tails (grazing rays integrate them over tens of metres)
 	float n = max( g.r - 0.05, 0.0 ) * ( uDensMax / 0.95 ) * smoothstep( 0.02, 0.3, min( edge.x, min( edge.y, edge.z ) ) ); // boids / m^3
 	// patchiness: krill aggregate in sheets and knots that slowly churn
-	float nz = vNoise( p * 0.22 + vec3( 0.0, uTime * 0.04, uTime * 0.03 ) ) * 0.6
-		+ vNoise( p * 0.75 - vec3( uTime * 0.07, 0.0, 0.0 ) ) * 0.4;
+	float nz = texture( uNoise, ( p * 0.22 + vec3( 0.0, uTime * 0.04, uTime * 0.03 ) ) * 0.125 ).a * 0.6
+		+ texture( uNoise, ( p * 0.75 - vec3( uTime * 0.07, 0.0, 0.0 ) ) * 0.125 + 0.37 ).a * 0.4;
 	n *= smoothstep( 0.1, 0.9, nz ) * 1.9;
 	// the whale's body (and its bow wave during a lunge) pushes krill aside
 	vec3 rel = p - uWhalePos;
@@ -321,6 +354,7 @@ class SwarmVolume {
       uniforms: {
         ...swarmUniforms,
         uGrid: { value: this.tex },
+        uNoise: { value: getNoise3D() },
         uBoxMin: { value: new THREE.Vector3() },
         uBoxSize: { value: new THREE.Vector3(1, 1, 1) },
         uCenter: { value: new THREE.Vector3() },
@@ -796,6 +830,8 @@ export class KrillSwarmView {
     this.speckMat.uniforms.uLen.value = len;
     this.nearMat.uniforms.uLen.value = len;
     this.specks.visible = this.volume.mesh.visible && dc < 75;
+    // distant patches are small on screen: half the slices
+    this.volume.material.uniforms.uSlices.value = dc > this.volume.radius * 1.5 ? SLICES / 2 : SLICES;
     // near field
     let k = 0;
     if (this.volume.mesh.visible && dc < NEAR_RADIUS + 2) {
