@@ -6,7 +6,7 @@ export const SPECIES = {
     id: 'humpback',
     // Breach (design doc s5): surge cost in krill, run-up climb angle, max exit
     // speed (m/s), twist default/max (rad). Humpbacks are the acrobats.
-    breachKrill: 300, // ~3-4 good lunges
+    breachKrill: 600, // ~2 dives of good lunges
     breachClimb: 1.31, // 75 deg
     vExitMax: 9.5,
     breachAccel: 1.6, // m/s^2 during the run-up
@@ -26,8 +26,8 @@ export const SPECIES = {
     o2Budget: 120,
     lungeO2: 0.08,
     lungeKrill: 70, // engulfment capacity per full lunge (boids)
-    stomachKrill: 420,
-    conditionPerKrill: 0.02,
+    stomachKrill: 250, // ~4 full lunges, then digest
+    conditionPerKrill: 0.012,
     krillKg: 2,
     metabolism: 0.006, // Condition points per second (~14/day)
     startCondition: 40,
@@ -40,7 +40,7 @@ export const SPECIES = {
   blue: {
     id: 'blue',
     // blues rarely breach, and only partially
-    breachKrill: 600,
+    breachKrill: 1200,
     breachClimb: 1.05, // 60 deg
     vExitMax: 7.0,
     breachAccel: 0.9, // m/s^2 during the run-up
@@ -56,8 +56,8 @@ export const SPECIES = {
     o2Budget: 150,
     lungeO2: 0.06,
     lungeKrill: 160, // engulfment capacity per full lunge (boids)
-    stomachKrill: 800,
-    conditionPerKrill: 0.012,
+    stomachKrill: 560,
+    conditionPerKrill: 0.007,
     krillKg: 2,
     metabolism: 0.007,
     startCondition: 40,
@@ -68,7 +68,7 @@ export const SPECIES = {
   },
   sperm: {
     id: 'sperm',
-    breachKrill: 250, // design doc: 4 squid once squid exist
+    breachKrill: 400, // design doc: 4 squid once squid exist
     breachClimb: 1.4, // 80 deg
     vExitMax: 9.0,
     breachAccel: 1.5, // m/s^2 during the run-up
@@ -84,8 +84,8 @@ export const SPECIES = {
     o2Budget: 360,
     lungeO2: 0.07,
     lungeKrill: 40, // engulfment capacity per full lunge (boids)
-    stomachKrill: 350,
-    conditionPerKrill: 0.018,
+    stomachKrill: 200,
+    conditionPerKrill: 0.012,
     krillKg: 2,
     metabolism: 0.005,
     startCondition: 40,

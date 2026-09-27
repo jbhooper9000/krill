@@ -121,11 +121,26 @@ export class KrillManager {
     return Math.min(-6, y);
   }
 
+  // Water depth (m) at (x, z); Infinity without terrain.
+  _waterAt(x, z) {
+    return this.terrain ? -this.terrain.heightAt(x, z) : Infinity;
+  }
+
   // Best of a few random candidates in a ring around (cx, cz): krill patches
   // need water deeper than ~45 m (E. pacifica live off the shelf) and gather on
   // canyon edges, where upwelled water and topography concentrate them.
   // dir (optional, {x, z} unit): bias candidates ahead of the player.
   _pickSite(cx, cz, r0, r1, dir) {
+    // widen the search (and drop the heading bias) until a site is in water
+    // deeper than 45 m; near the coast the nearest good water may be far off
+    for (let widen = 1; widen <= 8; widen *= 2) {
+      const s = this._pickSiteOnce(cx, cz, r0 * widen, r1 * widen, widen > 1 ? null : dir);
+      if (this._waterAt(s.x, s.z) >= 45) return s;
+      if (widen === 8) return s;
+    }
+  }
+
+  _pickSiteOnce(cx, cz, r0, r1, dir) {
     let best = null, bestScore = -Infinity;
     for (let k = 0; k < 20; k++) {
       let a = Math.random() * Math.PI * 2;
@@ -149,7 +164,8 @@ export class KrillManager {
     const far = 700;
     for (const cloud of this.krillClouds) {
       const d = Math.hypot(cloud.homeCenter.x - player.x, cloud.homeCenter.z - player.z);
-      if (d < far) continue;
+      const stranded = this._waterAt(cloud.homeCenter.x, cloud.homeCenter.z) < 30;
+      if (d < far && !stranded) continue;
       const s = this._pickSite(player.x, player.z, 180, 420, heading);
       const y = this._layerY(krillY + cloud.depthOffset, s.x, s.z);
       cloud.homeCenter.set(s.x, y, s.z);
@@ -194,7 +210,7 @@ export class KrillManager {
     const sp = whale.sp;
     const scale = whale.group.scale.x;
     const lunging = controller.state.isLunging;
-    const mouthRadius = sp.mouthRadius * scale * (lunging ? TUNING.lungePower : 1.15);
+    const mouthRadius = sp.mouthRadius * scale * (lunging ? TUNING.lungePower * 0.6 : 1.15);
 
     _mouth.copy(mouthPos);
     const fwd = controller.forwardDir;
@@ -215,11 +231,18 @@ export class KrillManager {
       const layerY = this._layerY(env.krillY + cloud.depthOffset, cloud.homeCenter.x, cloud.homeCenter.z);
       cloud.homeCenter.y += (layerY - cloud.homeCenter.y) * Math.min(1, dt * 0.02);
       if (this.terrain) {
-        // drifting over rising ground: never sink into the seafloor
+        // drifting over rising ground: never sink into the seafloor, and
+        // never rise out of the sea (a stranded patch is recycled offshore)
         cloud.homeCenter.y = Math.max(cloud.homeCenter.y, this.terrain.heightAt(cloud.homeCenter.x, cloud.homeCenter.z) + 8);
+        cloud.homeCenter.y = Math.min(cloud.homeCenter.y, -6);
       }
-      cloud.homeCenter.x += Math.sin(time * 0.05 + cloud.homeCenter.x * 0.01) * dt * 1.2;
-      cloud.homeCenter.z += Math.cos(time * 0.04 + cloud.homeCenter.z * 0.01) * dt * 1.2;
+      // the current drifts patches slowly, but only along deep water
+      const nx = cloud.homeCenter.x + Math.sin(time * 0.05 + cloud.homeCenter.x * 0.01) * dt * 1.2;
+      const nz = cloud.homeCenter.z + Math.cos(time * 0.04 + cloud.homeCenter.z * 0.01) * dt * 1.2;
+      if (this._waterAt(nx, nz) >= 40) {
+        cloud.homeCenter.x = nx;
+        cloud.homeCenter.z = nz;
+      }
       cloud.home.position[0] = cloud.homeCenter.x;
       cloud.home.position[1] = cloud.homeCenter.y;
       cloud.home.position[2] = cloud.homeCenter.z;

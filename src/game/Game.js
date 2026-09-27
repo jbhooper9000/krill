@@ -195,7 +195,9 @@ export class Game {
     if (c.state.isLunging) this._lungeCatch += eaten;
     else this._lungeCatch = 0;
     if (eaten > 0) {
-      const bonus = this._lungeCatch >= 40 ? 1.5 : 1;
+      // a clean lunge through the dense core (>= 85% of full capacity) counts extra
+      const full = this.whale.sp.lungeKrill;
+      const bonus = this._lungeCatch >= 0.85 * full ? 1.3 : 1;
       this.surge = Math.min(1, this.surge + (eaten * bonus) / (this.whale.sp.breachKrill * TUNING.breachCost));
     }
     const cost = this._breachCost();
@@ -224,7 +226,12 @@ export class Game {
       this.ui.prompt(data.reason);
     } else if (type === 'lunge') {
       this.phys.lungeStarted();
-      this._lungeLeft = Math.round(this.whale.sp.lungeKrill * (0.4 + 0.6 * data.power));
+      // engulfment volume grows with lunge charge and with speed at mouth-open
+      // (a lunge from a standstill gulps much less water): a skill gradient
+      const cruise = TUNING.swimSpeed * this.whale.sp.speed;
+      const speedK = Math.min(1.1, Math.max(0.3, this.controller.speed / (cruise * 1.2)));
+      this._lungeCap = Math.round(this.whale.sp.lungeKrill * (0.4 + 0.6 * data.power) * speedK);
+      this._lungeLeft = this._lungeCap;
     } else if (type === 'breach-abort') {
       this.surge *= 0.8;
       this.ui.prompt('Breach aborted');
@@ -258,8 +265,9 @@ export class Game {
     // never cut a dive or a breach short: the day ends at the next breath
     const c = this.controller;
     if (!starved && !(c.atSurface && c.mode === 'swim' && !phys.blackout)) {
-      if (!this._dayOverPrompted) {
-        this._dayOverPrompted = true;
+      // repeat the reminder every ~10 s until the whale surfaces
+      if (!this._dayOverPrompted || this._elapsed - this._dayOverPrompted > 10) {
+        this._dayOverPrompted = this._elapsed;
         this.ui.prompt('The day is done \u2014 surface to rest');
       }
       return;

@@ -620,6 +620,8 @@ export class UI {
       this._showHint('air', HINTS.air, 9000, { urgent: true });
     }
     if (this._hint === 'air' && c.atSurface) this._doneHint('air');
+    // the breathing lesson belongs to the surface
+    if (this._hint === 'breathe' && !c.atSurface) this._doneHint('breathe');
     // everything else waits until the player has learned to swim
     if (!this._hintsDone.has('swim') || this._hint === 'swim') return;
 
@@ -758,6 +760,9 @@ export class UI {
     ring.classList.add('ready');
     word.classList.add('ready');
     word.textContent = 'Breach';
+    // only the useful state is announced unprompted; the reasons F won't work
+    // come from Game.prompt() when the player actually presses F
+    if (win !== 'ok') return;
     this._show(ring, 6000);
     this._show(word, 6000);
     if (promptBusy) return;

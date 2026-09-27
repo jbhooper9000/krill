@@ -207,6 +207,8 @@ const scenarios = {
   },
   // End-of-day card: jump the day clock to midnight and let the game end the day.
   async daycard() {
+    // the day now ends at the next breath: put the whale at the surface first
+    await evaljs(`(() => { const c = krill.controller; c.position.y = c.bounds.maxY; c.velocity.set(0, 0, 0); return 1; })()`);
     await sleep(1000);
     await evaljs(`(() => { krill.phys.stats = { kg: 1240, dives: 14, lunges: 23, breaches: 3, blackouts: 0, bestLunge: 61 };
       krill._dayTime = 24 * 3600 / 36; return 1; })()`);
