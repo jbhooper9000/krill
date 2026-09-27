@@ -79,7 +79,9 @@ void main() {
 		vec2 sv = ( viewMatrix * vec4( iVel, 0.0 ) ).xy;
 		float sl = length( sv );
 		axis = sl > 1e-4 ? sv / sl : vec2( 0.0, 1.0 );
-		hl = hw + 0.5 * sl * stretch;
+		// drops are never round: at least ~2.5:1 along the motion (a droplet in
+		// flight smears over the exposure; round white discs read as cotton)
+		hl = max( hw + 0.5 * sl * stretch, hw * 2.5 );
 		alpha *= mix( 1.0, hw / hl, 0.5 ); // the same water smeared along the path
 		mvPosition.xy -= axis * ( hl - hw ); // head at the particle, tail behind
 	} else {
@@ -111,8 +113,10 @@ void main() {
 	float a;
 	#if defined( SP_STREAK )
 		// soft capsule: bright head (+y), fading tail
-		float d = length( vUv );
-		a = ( 1.0 - smoothstep( 0.25, 1.0, d ) ) * ( 0.3 + 0.7 * smoothstep( - 1.0, 0.7, vUv.y ) );
+		// tapered streak: full width at the head, thinning to the tail
+		float w = mix( 0.25, 1.0, smoothstep( - 1.0, 0.6, vUv.y ) );
+		float d = length( vec2( vUv.x / w, vUv.y ) );
+		a = ( 1.0 - smoothstep( 0.3, 1.0, d ) ) * ( 0.35 + 0.65 * smoothstep( - 1.0, 0.7, vUv.y ) );
 	#elif defined( SP_BUBBLE )
 		// small bubbles: bright rim, clearer core
 		float r = length( vUv );
@@ -121,6 +125,11 @@ void main() {
 		float cell = floor( fract( vSeed * 3.7 ) * 4.0 );
 		vec2 uv = ( vUv * 0.5 + 0.5 ) * 0.5 + vec2( mod( cell, 2.0 ), floor( cell / 2.0 ) ) * 0.5;
 		a = texture2D( uAtlas, uv ).a;
+		// erode with a second, rotated cell: ragged wisps, not cotton balls
+		vec2 r2 = vec2( vUv.y, - vUv.x ) * 0.8;
+		float cell2 = mod( cell + 1.0, 4.0 );
+		vec2 uv2 = ( r2 * 0.5 + 0.5 ) * 0.5 + vec2( mod( cell2, 2.0 ), floor( cell2 / 2.0 ) ) * 0.5;
+		a *= smoothstep( 0.05, 0.6, texture2D( uAtlas, uv2 ).a * 1.6 );
 	#endif
 	a *= vAlpha;
 	if ( a < 0.003 ) discard;
@@ -491,17 +500,17 @@ export class Splash {
       this.spray.spawn(
         pos.x + Math.cos(a) * r, y + Math.random() * 0.3, pos.z + Math.sin(a) * r,
         Math.cos(a) * out + dir.x * 2.5, up, Math.sin(a) * out + dir.z * 2.5,
-        1.0 + Math.random() * 1.3, sheet ? 0.35 + Math.random() * 0.5 : 0.06 + Math.random() * 0.12,
-        { stretch: 0.045, alpha: sheet ? 0.55 : 0.9, drag: 0.25, grow: sheet ? 0.8 : 0 },
+        1.0 + Math.random() * 1.3, sheet ? 0.2 + Math.random() * 0.25 : 0.05 + Math.random() * 0.09,
+        { stretch: sheet ? 0.1 : 0.06, alpha: sheet ? 0.35 : 0.85, drag: 0.25, grow: sheet ? 0.5 : 0 },
       );
     }
-    for (let i = 0; i < Math.round(45 * k); i++) {
+    for (let i = 0; i < Math.round(30 * k); i++) {
       const a = Math.random() * Math.PI * 2;
       const r = size * 0.12 * Math.random();
       this.mist.spawn(pos.x + Math.cos(a) * r, y + 0.5 + Math.random() * 2, pos.z + Math.sin(a) * r,
         Math.cos(a) * 1.2, 1 + Math.random() * 2, Math.sin(a) * 1.2,
-        2.5 + Math.random() * 2, size * (0.1 + Math.random() * 0.1),
-        { grav: 0.05, drag: 1.2, alpha: 0.3, grow: 1.6, windK: 0.7 });
+        2.5 + Math.random() * 2, size * (0.14 + Math.random() * 0.12),
+        { grav: 0.05, drag: 1.2, alpha: 0.14, grow: 1.8, windK: 0.7 });
     }
     this._bubbleBurst(pos, size * 0.5, Math.round(700 * k), 0.6);
     this._addFoam(pos, size * 0.35, 0.7);
@@ -530,8 +539,8 @@ export class Splash {
       this.spray.spawn(
         pos.x + Math.cos(a) * ring, y + Math.random() * 0.4, pos.z + Math.sin(a) * ring,
         Math.cos(a) * out, up, Math.sin(a) * out,
-        1.4 + Math.random() * 1.6, sheet ? 0.4 + Math.random() * 0.6 : 0.07 + Math.random() * 0.14,
-        { stretch: 0.04, alpha: sheet ? 0.5 : 0.9, drag: 0.2, grow: sheet ? 1 : 0.2 },
+        1.4 + Math.random() * 1.6, sheet ? 0.25 + Math.random() * 0.4 : 0.06 + Math.random() * 0.12,
+        { stretch: sheet ? 0.09 : 0.055, alpha: sheet ? 0.4 : 0.9, drag: 0.2, grow: sheet ? 0.8 : 0.2 },
       );
     }
     // central plume: a tall column of heavy spray
@@ -705,16 +714,16 @@ export class Splash {
         const f = 0.55 + Math.random() * 0.4;
         this.spray.spawn(_v.x, Math.max(y, wl + 0.05), _v.z,
           vel.x * f + _n.x * 2, Math.max(1, vel.y * f) + Math.random(), vel.z * f + _n.z * 2,
-          0.8 + Math.random() * 0.8, 0.15 + Math.random() * 0.4,
-          { stretch: 0.05, alpha: 0.65, drag: 0.3, grow: 0.6 });
+          0.8 + Math.random() * 0.8, 0.1 + Math.random() * 0.22,
+          { stretch: 0.1, alpha: 0.45, drag: 0.3, grow: 0.4 });
       } else {
         // sheets pouring off the back, flanks and flukes, lagging the body
         const f = 0.2 + Math.random() * 0.25;
         const sheet = Math.random() < 0.5;
         this.spray.spawn(_v.x + _n.x * 0.1, y, _v.z + _n.z * 0.1,
           vel.x * f + _n.x * 0.6, vel.y * f + _n.y * 0.4, vel.z * f + _n.z * 0.6,
-          0.9 + Math.random() * 0.8, sheet ? 0.25 + Math.random() * 0.35 : 0.05 + Math.random() * 0.08,
-          { stretch: 0.06, alpha: sheet ? 0.5 : 0.85, drag: 0.3, grow: sheet ? 0.4 : 0 });
+          0.9 + Math.random() * 0.8, sheet ? 0.12 + Math.random() * 0.18 : 0.04 + Math.random() * 0.06,
+          { stretch: 0.12, alpha: sheet ? 0.35 : 0.85, drag: 0.3, grow: sheet ? 0.3 : 0 });
       }
     }
     if (s.time >= s.duration) this._shed = null;
