@@ -41,6 +41,8 @@ export class Game {
     this.terrain = new Terrain(this.scene, {
       // underwater light model hook: applied if the lighting engineer's World provides it
       patchMaterial: this.world.patchMaterial ? (m) => this.world.patchMaterial(m) : null,
+      // sunlight 0..1 (day/night) for effects the light model cannot see, e.g. light through kelp
+      lightLevel: () => this.world.lightLevel ?? 1,
     });
     this.terrain.onRebase((dx, dz) => this._onRebase(dx, dz));
     this.region = null;
@@ -385,6 +387,16 @@ export class Game {
     }
 
     // stream/LOD the seafloor around the camera (may rebase the floating origin)
+    // Draw distance: underwater the haze ends the view within ~500 m, but from
+    // the air the coast is kilometres away (the near plane moves out to keep
+    // depth precision).
+    const air = this.camera.position.y > 0.3;
+    const far = air ? 30000 : 500, near = air ? 0.3 : 0.1;
+    if (this.camera.far !== far) {
+      this.camera.far = far;
+      this.camera.near = near;
+      this.camera.updateProjectionMatrix();
+    }
     this.terrain.update(this.camera);
     if (this.running) this._updateRegion(rawDt);
 
