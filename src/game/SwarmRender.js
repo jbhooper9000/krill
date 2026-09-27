@@ -49,7 +49,7 @@ export const swarmUniforms = {
   uLunge: { value: 0 }, // 0..1, eased
   // readability gain on the krill skin radiance (documented compromise, see
   // swKrillPatch): lets a day patch read at 30-60 m in Monterey-green water
-  uPatchGain: { value: 2.8 },
+  uPatchGain: { value: 4.5 },
 };
 
 // Viewport-dependent uniforms, refreshed from onBeforeRender (the only place
@@ -176,27 +176,29 @@ vec3 swScatter( vec3 p, vec3 wo, vec3 albedo, float shadow ) {
 	vec3 amb = swAmbAt( p ) * ( KW_W0 * 0.7 + vec3( 0.006 ) );
 	return albedo * ( sun + amb );
 }
-// A dense krill patch seen by day (PLAYTEST_2 N3). Krill are cm-sized,
-// reflective scatterers: unlike the water's particulates (whose phase function
-// is sharply forward-peaked, ~0.005/sr at 90 deg) they send a large share of
-// the down-welling light sideways and back (~0.08/sr, near-Lambertian). So a
-// patch's sunlit top glows copper against the water while its self-shadowed
-// core and underside stay dark. Documented compromise: the effective albedo is
-// ~2x a single krill's (population-integrated carapace glints + multiple
-// scattering in the lit skin), so the patch reads at 30-60 m in turbid water.
+// A dense krill patch seen by day (PLAYTEST_2 N3, PLAYTEST_3 NEW-5).
+// E. pacifica are carotenoid-red: they reflect red and absorb green/blue. At
+// depth the down-welling light is green-blue, so a patch is a pigmented,
+// ABSORBING mass - dark brown to near-black against the green water - not a
+// glowing fog. (Near the surface, at night-time depths, the red returns and it
+// reads rust.) Only the directly sunlit top skin catches light: krill are
+// cm-sized reflective scatterers (~0.08/sr sideways vs ~0.005/sr for the
+// water's particulates), and carapace glints add a forward lobe there.
+// Documented compromise: uPatchGain brightens that sunlit skin only (not the
+// core), so the patch's upper edge still reads at 30-60 m.
 vec3 swKrillPatch( vec3 p, vec3 wo, float shadow ) {
 	float cosT = dot( - wo, KW_SUNW );
 	float g = 0.55;
 	float fwd = ( 1.0 - g * g ) / pow( max( 1.0 + g * g - 2.0 * g * cosT, 1e-3 ), 1.5 );
-	vec3 albedo = vec3( 0.62, 0.34, 0.2 ) * 2.0;
+	vec3 albedo = vec3( 0.62, 0.13, 0.07 ); // carotenoid pigment
 	// the forward (diffraction) lobe only for the directly lit top skin: side-
 	// lit and self-shadowed krill don't see the sun's direction, so from below
 	// the patch stays a dark silhouette against the surface
 	float topLit = smoothstep( 0.72, 0.95, shadow );
 	vec3 key = swSunAt( p ) * KW_SUNCOL * shadow * ( 0.08 + 0.035 * fwd * topLit );
-	// diffuse field: mostly from above too, so it is also shadowed (less so)
-	vec3 amb = swAmbAt( p ) * KW_W0 * 1.2 * mix( 0.25, 1.0, shadow );
-	return albedo * ( key + amb ) * uPatchGain;
+	// diffuse field: mostly from above too, so it is also shadowed (strongly)
+	vec3 amb = swAmbAt( p ) * KW_W0 * 0.8 * mix( 0.12, 1.0, shadow );
+	return albedo * ( key * mix( 1.0, uPatchGain, topLit ) + amb );
 }
 `;
 
@@ -366,7 +368,7 @@ void main() {
 	#endif
 	float a = 1.0 - exp( - ( sigma + sigmaS ) * ds );
 	if ( a < 0.002 ) discard;
-	vec3 col = swKrillPatch( p, - dir, g.g ) * ( 0.6 + 0.6 * knots ) * ( sigma / max( sigma + sigmaS, 1e-6 ) );
+	vec3 col = swKrillPatch( p, - dir, g.g ) * ( 0.75 + 0.35 * knots ) * ( sigma / max( sigma + sigmaS, 1e-6 ) );
 	gl_FragColor = vec4( col, a );
 	// water model along the view ray. Near and mid range, readability comes
 	// from the post-process dehaze (it sees the patch through the depth pass).
@@ -587,11 +589,16 @@ attribute vec3 aOff;
 attribute float aSeed;
 uniform float uSpread;
 uniform float uLen;
+uniform highp sampler3D uGrid; // the patch's density / skylight grid (shared with the volume)
+uniform vec3 uBoxMin;
+uniform vec3 uBoxSize;
+uniform float uInflate;
 varying vec3 vColor;
 varying float vAlpha;
 varying vec2 vAxis;
 varying vec2 vHalf; // half length / half width in px
 varying float vSize;
+varying float vFlash;
 ${WATER_GLSL}
 ${BOID_GLSL}
 ${LIGHT_GLSL}
@@ -618,19 +625,33 @@ void main() {
 	halfLen = max( halfLen, halfWid );
 	// sub-pixel krill become coverage: the swarm converges to the volume's haze
 	float cov = min( 1.0, halfWid / 0.5 ) * min( 1.0, halfLen / 0.75 );
-	vHalf = max( vec2( halfLen, halfWid ), vec2( 0.75, 0.5 ) );
+	// out to ~40 m each speck is kept as a stable ~1.5 px grain (a knot of a
+	// few animals): the patch body reads as millions of krill, not smoke
+	float grain = smoothstep( 5.0, 10.0, z ) * ( 1.0 - smoothstep( 38.0, 52.0, z ) );
+	cov = max( cov, 0.45 * grain );
+	vHalf = max( vec2( halfLen, halfWid ), mix( vec2( 0.75, 0.5 ), vec2( 1.0, 0.75 ), grain ) );
 	vSize = 2.0 * vHalf.x + 2.0;
 	gl_PointSize = vSize;
-	float fade = smoothstep( 1.2, 2.2, z ) * ( 1.0 - smoothstep( 80.0, 110.0, z ) );
+	float fade = smoothstep( 1.2, 2.2, z ) * ( 1.0 - smoothstep( 45.0, 60.0, z ) );
 	vAlpha = bp.w * cov * fade * ( 0.55 + 0.45 * s1 );
 	if ( bp.w < 0.5 || vAlpha < 0.003 ) gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
 
 	// lighting: body colour varies from pale translucent to deep red
 	vec3 wo = normalize( cameraPosition - p );
-	vec3 col = swKrillPatch( p, wo, 0.55 ) * mix( 0.6, 0.35, s1 );
-	// carapace glints: a krill twisting past the specular angle
+	// each speck is lit like the patch around it: specks in the sunlit skin
+	// catch light (and glint), specks inside the pigmented core stay dark,
+	// so the body reads granular - individual animals, not smoke
+	vec3 boxC = uBoxMin + 0.5 * uBoxSize;
+	vec2 gs = texture( uGrid, clamp( ( boxC + ( p - boxC ) / uInflate - uBoxMin ) / uBoxSize, 0.0, 1.0 ) ).rg;
+	float sh = gs.g;
+	// specks deep in the dense interior are hidden by the krill in front of
+	// them (the volume carries that mass); the grain lives in the skin and halo
+	vAlpha *= mix( 1.0, 0.4, smoothstep( 0.35, 0.8, gs.r ) );
+	vec3 col = swKrillPatch( p, wo, sh ) * mix( 1.3, 0.6, s1 );
+	// carapace glints: a krill twisting past the specular angle; more of them
+	// where the sunlight reaches (shimmer along the lit skin)
 	float tw = sin( uTime * ( 1.3 + 5.0 * s1 ) + aSeed * 57.0 + dist0 * uTime * 9.0 );
-	float glint = pow( max( tw, 0.0 ), mix( 90.0, 14.0, dist0 ) );
+	float glint = pow( max( tw, 0.0 ), mix( mix( 90.0, 36.0, smoothstep( 0.6, 0.95, sh ) ), 14.0, dist0 ) ) * mix( 0.3, 1.0, sh );
 	col += glint * ( swSunAt( p ) * KW_SUNCOL + swAmbAt( p ) * KW_W0 * 4.0 * dist0 ) * ( 1.2 + 4.0 * dist0 ) * vec3( 1.0, 0.92, 0.85 );
 	// photophores: blue-green bioluminescent flashes when disturbed (constant
 	// absolute radiance: invisible by day, sparks at night)
@@ -642,8 +663,10 @@ void main() {
 	// turn into blocky bloom squares); visibility comes from size + alpha
 	col += bl * vec3( 0.03, 0.34, 0.5 ) * 0.09 * blGain;
 	vAlpha = min( 1.0, max( vAlpha * ( 1.0 + 2.0 * glint * dist0 ), bl * fade * bp.w ) );
-	// a flashing krill is a point light: at least ~2 px
-	if ( bl > 0.05 ) { vHalf = max( vHalf, vec2( 1.4 ) ); vSize = max( vSize, 5.0 ); gl_PointSize = vSize; }
+	// a flashing krill is a point light: drawn as a soft round gaussian of a
+	// fixed pixel footprint (sub-pixel stable; no square pixels or bloom blocks)
+	vFlash = step( 0.05, bl );
+	if ( vFlash > 0.5 ) { vSize = max( vSize, 9.0 ); gl_PointSize = vSize; }
 	vColor = kwWater( col, cameraPosition, p );
 }
 `;
@@ -653,6 +676,7 @@ varying float vAlpha;
 varying vec2 vAxis;
 varying vec2 vHalf;
 varying float vSize;
+varying float vFlash;
 void main() {
 	vec2 q = ( gl_PointCoord - 0.5 ) * vSize;
 	q.y = - q.y;
@@ -660,6 +684,8 @@ void main() {
 	float b = dot( q, vec2( - vAxis.y, vAxis.x ) ) / vHalf.y;
 	float d = length( vec2( a, b ) );
 	float m = 1.0 - smoothstep( 0.55, 1.0, d );
+	// photophore: round gaussian, sigma 1.3 px
+	if ( vFlash > 0.5 ) m = exp( - dot( q, q ) / ( 2.0 * 1.3 * 1.3 ) );
 	float alpha = m * vAlpha;
 	if ( alpha < 0.004 ) discard;
 	gl_FragColor = vec4( vColor, alpha );
@@ -905,7 +931,14 @@ export class KrillSwarmView {
     sg.setAttribute('aOff', new THREE.BufferAttribute(aOff, 3));
     sg.setAttribute('aSeed', new THREE.BufferAttribute(aSeed, 1));
     this.speckMat = makeWaterAware(new THREE.ShaderMaterial({
-      uniforms: { ...swarmUniforms, uBoids: { value: this.boids.texture }, uSpread: { value: 2.4 }, uLen: { value: 0.045 } },
+      uniforms: {
+        ...swarmUniforms, uBoids: { value: this.boids.texture }, uSpread: { value: 3.5 }, uLen: { value: 0.045 },
+        // shared uniform objects: always the volume's current grid and box
+        uGrid: this.volume.material.uniforms.uGrid,
+        uBoxMin: this.volume.material.uniforms.uBoxMin,
+        uBoxSize: this.volume.material.uniforms.uBoxSize,
+        uInflate: this.volume.material.uniforms.uInflate,
+      },
       vertexShader: speckVert,
       fragmentShader: speckFrag,
       transparent: true,
@@ -941,12 +974,14 @@ export class KrillSwarmView {
     const under = cam.y < 0;
     this.volume.mesh.renderOrder = under ? 12 : 5;
     this.volume.depthMesh.renderOrder = under ? 12.5 : 5.5;
-    this.specks.renderOrder = under ? 13 : 6;
+    // specks between the colour volume and its depth pass: the patch's own
+    // depth must not reject its grain
+    this.specks.renderOrder = under ? 12.3 : 5.3;
     this.near.renderOrder = under ? 14 : 7;
     const len = 0.045 * lenScale;
     this.speckMat.uniforms.uLen.value = len;
     this.nearMat.uniforms.uLen.value = len;
-    this.specks.visible = this.volume.mesh.visible && dc < 110;
+    this.specks.visible = this.volume.mesh.visible && dc < 60;
     // distant patches are small on screen: half the slices
     this.volume.material.uniforms.uSlices.value = dc > this.volume.radius * 1.5 ? SLICES / 2 : SLICES;
     // near field
