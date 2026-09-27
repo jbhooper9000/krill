@@ -1,144 +1,14 @@
 import * as THREE from 'three';
 import { BoidSystem } from './Boids.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { TUNING } from './Tuning.js';
+import { KrillSwarmView, FishSchoolView, swarmUniforms } from './SwarmRender.js';
 
-function makeKrillGeometry() {
-  const g = new THREE.SphereGeometry(0.5, 8, 6);
-  g.scale(0.9, 0.2, 0.2); // elongated
-  return g;
-}
+// Rendering lives in SwarmRender.js: each krill patch is a density volume +
+// sub-particle specks + near-camera impostors, each anchovy school a bait ball
+// of ~1,700 mirror-flanked impostors, all driven by the boids through a float
+// texture (see the header there). This file owns the simulation and feeding.
 
-function makeFishGeometry() {
-  const body = new THREE.SphereGeometry(0.5, 10, 8);
-  body.scale(1.2, 0.44, 0.3);
-  // vertical tail fin
-  const tail = new THREE.BufferGeometry();
-  const verts = new Float32Array([
-    -0.55, 0, 0,
-    -1.05, 0.34, 0,
-    -1.05, -0.34, 0,
-  ]);
-  tail.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-  tail.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 0, 1, 0.5, 1, 1]), 2));
-  tail.setIndex([0, 1, 2, 0, 2, 1]);
-  tail.computeVertexNormals();
-  const merged = mergeGeometries([body, tail]);
-  return merged;
-}
-
-// ---- materials ------------------------------------------------------------
-// Both are MeshStandardMaterial (so they get the water model: depth-attenuated
-// sun + caustics + absorption, see WaterMedium.js) with small shader tweaks
-// driven by the instance-local vertex position.
-
-// Krill: translucent shell with orange-red chromatophores, a darker gut and
-// black eyes at the head (+X is forward, along velocity). Sunlight passing
-// THROUGH the thin body (looking toward the sun) and a little wrapped light
-// give the glowing-translucent read; low-ish roughness gives the glints that
-// make a swarm shimmer as individuals turn.
-function makeKrillMaterial() {
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.38,
-    metalness: 0,
-  });
-  mat.onBeforeCompile = (shader) => {
-    shader.vertexShader = 'varying vec3 vKLocal;\n' + shader.vertexShader.replace(
-      '#include <begin_vertex>',
-      '#include <begin_vertex>\n\tvKLocal = position;'
-    );
-    shader.fragmentShader = 'varying vec3 vKLocal;\n' + shader.fragmentShader
-      .replace(
-        '#include <color_fragment>',
-        /* glsl */ `#include <color_fragment>
-	float kEye;
-	float kGut;
-	{
-		float ax = vKLocal.x / 0.45;                 // -1 tail .. +1 head
-		float chroma = 0.5 + 0.5 * sin( ax * 21.0 + vKLocal.z * 70.0 );
-		vec3 shell = vec3( 0.82, 0.40, 0.24 );
-		vec3 pigment = vec3( 0.62, 0.11, 0.05 );
-		vec3 c = mix( shell, pigment, 0.35 + 0.45 * chroma * smoothstep( - 0.7, 0.5, ax ) );
-		kGut = 1.0 - smoothstep( 0.0, 0.35, abs( ax - 0.15 ) );
-		c = mix( c, vec3( 0.22, 0.2, 0.08 ), 0.45 * kGut );
-		kEye = smoothstep( 0.6, 0.78, ax ) * smoothstep( 0.02, 0.055, abs( vKLocal.z ) );
-		c = mix( c, vec3( 0.012 ), kEye );
-		diffuseColor.rgb = c;
-	}`
-      )
-      .replace(
-        '#include <opaque_fragment>',
-        /* glsl */ `
-	#ifdef USE_FOG
-	{
-		vec3 kV = normalize( vViewPosition );
-		float kBack = pow( saturate( dot( - kV, kwSunV ) ), 3.0 );
-		float kWrap = saturate( dot( - normal, kwSunV ) * 0.5 + 0.5 );
-		outgoingLight += diffuseColor.rgb * kwSunT * ( kBack * 1.1 + kWrap * 0.22 );
-		outgoingLight += diffuseColor.rgb * kwAmbT * 0.06;
-		// see-through body: the water radiance behind the animal, tinted by
-		// the shell, replaces part of the reflected light (cheap stand-in for
-		// real transmission, no sorting or extra passes)
-		vec3 kDir = normalize( vKwWorld - cameraPosition );
-		vec3 kBg = kwWaterRadiance( kDir ) * kwLightAt( vKwWorld.y - KW_LEVEL ) * 1.15;
-		vec3 kTint = mix( vec3( 1.0 ), diffuseColor.rgb * 1.3, 0.6 );
-		float kTrans = 0.5 * ( 1.0 - kEye ) * ( 1.0 - 0.6 * kGut );
-		outgoingLight = mix( outgoingLight, kBg * kTint, kTrans );
-	}
-	#endif
-	#include <opaque_fragment>`
-      );
-  };
-  return mat;
-}
-
-// Fish: counter-shaded — dark blue-green, fairly matte back; mirror-like
-// silver flanks (high metalness reflecting the underwater environment: the
-// bright Snell's window above, dark water below) and a white belly.
-function makeFishMaterial() {
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.14,
-    metalness: 0.9,
-    envMapIntensity: 1.8,
-  });
-  mat.onBeforeCompile = (shader) => {
-    shader.vertexShader = 'varying vec3 vFLocal;\n' + shader.vertexShader.replace(
-      '#include <begin_vertex>',
-      '#include <begin_vertex>\n\tvFLocal = position;'
-    );
-    shader.fragmentShader = 'varying vec3 vFLocal;\n' + shader.fragmentShader
-      .replace(
-        '#include <color_fragment>',
-        /* glsl */ `#include <color_fragment>
-	float fBack = smoothstep( 0.02, 0.16, vFLocal.y );
-	{
-		float belly = smoothstep( - 0.05, - 0.18, vFLocal.y );
-		vec3 flank = vec3( 0.92, 0.95, 0.97 );
-		vec3 c = mix( flank, vec3( 0.95 ), belly );
-		c = mix( c, vec3( 0.07, 0.16, 0.19 ), fBack );
-		diffuseColor.rgb = c;
-	}`
-      )
-      .replace(
-        '#include <metalnessmap_fragment>',
-        '#include <metalnessmap_fragment>\n\tmetalnessFactor = mix( metalnessFactor, 0.15, fBack );'
-      )
-      .replace(
-        '#include <roughnessmap_fragment>',
-        '#include <roughnessmap_fragment>\n\troughnessFactor = mix( roughnessFactor, 0.55, fBack );'
-      );
-  };
-  return mat;
-}
-
-const _dummy = new THREE.Object3D();
 const _mouth = new THREE.Vector3();
-const _xAxis = new THREE.Vector3();
-const _yAxis = new THREE.Vector3();
-const _zAxis = new THREE.Vector3();
-const _m = new THREE.Matrix4();
 const _home = [0, 0, 0];
 
 export class KrillManager {
@@ -154,11 +24,8 @@ export class KrillManager {
     this.fishSchools = [];
     this.totalEaten = 0;
     this.eatenThisFrame = 0;
-
-    this._krillGeo = makeKrillGeometry();
-    this._fishGeo = makeFishGeometry();
-    this._krillMat = makeKrillMaterial();
-    this._fishMat = makeFishMaterial();
+    this._lungeVis = 0; // eased lunge state for the swarm shaders
+    this._viewSeed = 1;
   }
 
   _addKrillCloud(center) {
@@ -183,9 +50,8 @@ export class KrillManager {
     const home = { type: 'attract', position: [center[0], center[1], center[2]], radius: 60, strength: 2.5, active: true };
     system.externals = [flee, home];
 
-    const mesh = new THREE.InstancedMesh(this._krillGeo, this._krillMat, count);
-    mesh.frustumCulled = false;
-    this.scene.add(mesh);
+    // `mesh` is the render view (kept under the old name for callers)
+    const mesh = new KrillSwarmView(this.scene, count, this._viewSeed++);
 
     this.krillClouds.push({
       system, mesh, flee, home,
@@ -218,9 +84,7 @@ export class KrillManager {
     const home = { type: 'attract', position: [center[0], center[1], center[2]], radius: 70, strength: 2.0, active: true };
     system.externals = [flee, home];
 
-    const mesh = new THREE.InstancedMesh(this._fishGeo, this._fishMat, count);
-    mesh.frustumCulled = false;
-    this.scene.add(mesh);
+    const mesh = new FishSchoolView(this.scene, count, this._viewSeed++);
 
     this.fishSchools.push({
       system, mesh, flee, home,
@@ -414,6 +278,7 @@ export class KrillManager {
       this._writeInstances(school.mesh, sys, 1);
     }
 
+    this._updateVisuals(dt, time, whale, controller); // [VFX] render-only hook: swarm/school views, no gameplay state
     return this.eatenThisFrame;
   }
 
@@ -421,40 +286,32 @@ export class KrillManager {
   rebuildKrill() {
     const homes = this.krillClouds.map((c) => c.homeCenter.clone());
     // (rebuild resets biomass: it's a tuning tool)
-    for (const cloud of this.krillClouds) {
-      this.scene.remove(cloud.mesh);
-      cloud.mesh.dispose();
-    }
+    for (const cloud of this.krillClouds) cloud.mesh.dispose();
     this.krillClouds = [];
     for (const h of homes) this._addKrillCloud(h.toArray());
   }
 
-  _writeInstances(mesh, system, scale = 1) {
-    const { pos, vel, alive, count } = system;
-    for (let i = 0; i < count; i++) {
-      const i3 = i * 3;
-      if (!alive[i]) {
-        _dummy.position.set(-99999, -99999, -99999);
-        _dummy.scale.setScalar(0);
-        _dummy.updateMatrix();
-        mesh.setMatrixAt(i, _dummy.matrix);
-        continue;
-      }
-      _dummy.position.set(pos[i3], pos[i3 + 1], pos[i3 + 2]);
-      // orient +X along velocity, keep +Y roughly up
-      const vx = vel[i3], vy = vel[i3 + 1], vz = vel[i3 + 2];
-      const len = Math.hypot(vx, vy, vz) || 1;
-      _xAxis.set(vx / len, vy / len, vz / len);
-      _zAxis.crossVectors(_xAxis, _yAxis.set(0, 1, 0));
-      if (_zAxis.lengthSq() < 1e-6) _zAxis.set(0, 0, 1);
-      _zAxis.normalize();
-      _yAxis.crossVectors(_zAxis, _xAxis).normalize();
-      _m.makeBasis(_xAxis, _yAxis, _zAxis);
-      _dummy.quaternion.setFromRotationMatrix(_m);
-      _dummy.scale.setScalar(scale);
-      _dummy.updateMatrix();
-      mesh.setMatrixAt(i, _dummy.matrix);
-    }
-    mesh.instanceMatrix.needsUpdate = true;
+  // Kept for the simulation loop's calls; views are updated in _updateVisuals
+  // (they need the camera).
+  _writeInstances() {}
+
+  // ---- rendering (VFX) -------------------------------------------------------
+  // Uploads boid state to the swarm/school views, selects LODs around the
+  // camera and feeds the whale's pose to the shaders (visual parting/flashes).
+  _updateVisuals(dt, time, whale, controller) {
+    const camera = controller.camera;
+    if (!camera) return;
+    const u = swarmUniforms;
+    u.uTime.value = time;
+    u.uWhalePos.value.copy(whale.group.position);
+    u.uWhaleFwd.value.copy(controller.forwardDir);
+    u.uWhaleLen.value = whale.sp.length * whale.group.scale.x;
+    u.uMouth.value.copy(controller.mouthPosition);
+    const target = controller.state.isLunging ? 1 : 0;
+    this._lungeVis += (target - this._lungeVis) * Math.min(1, dt * (target ? 6 : 1.2));
+    u.uLunge.value = this._lungeVis;
+    const lenScale = TUNING.krillSize / 0.2; // tuning slider scales krill size around the realistic default
+    for (const cloud of this.krillClouds) cloud.mesh.update(cloud.system, camera, lenScale);
+    for (const school of this.fishSchools) school.mesh.update(school.system, camera);
   }
 }
