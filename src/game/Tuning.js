@@ -11,7 +11,8 @@ export const TUNABLES = [
   // cruise speed (m/s) before species factor; real rorqual cruise is ~2-5 m/s
   { id: 'swimSpeed', label: 'Swim speed', min: 2, max: 20, step: 0.5, value: 4.5 },
   { id: 'turnRate', label: 'Turn rate', min: 0.3, max: 3.0, step: 0.1, value: 2.2 },
-  { id: 'cameraDist', label: 'Camera distance', min: 0.3, max: 1.8, step: 0.05, value: 1.8 },
+  // in body lengths; ~1.1 keeps the whale readable in Monterey's 10-15 m visibility
+  { id: 'cameraDist', label: 'Camera distance', min: 0.3, max: 1.8, step: 0.05, value: 1.1 },
   { id: 'lungePower', label: 'Lunge power', min: 1.5, max: 4.0, step: 0.1, value: 2.4 },
   { id: 'breachCost', label: 'Breach surge cost ×', min: 0.1, max: 2, step: 0.05, value: 1 },
   { id: 'breachSlowmo', label: 'Breach slow-mo (0/1)', min: 0, max: 1, step: 1, value: 1 },
