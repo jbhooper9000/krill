@@ -119,8 +119,7 @@ float swHash( float n ) { return fract( sin( n ) * 43758.5453123 ); }
 // and invisible at swarm depths; the near-surface flicker comes from glints.
 const LIGHT_GLSL = /* glsl */ `
 vec3 swSunAt( vec3 p ) {
-	float depth = max( KW_LEVEL - p.y, 0.0 );
-	return exp( - KW_KD * depth / max( KW_SUNW.y, 0.3 ) );
+	return exp( - kwTauDown( p.y - KW_LEVEL ) / max( KW_SUNW.y, 0.3 ) ) * KW_KEYT;
 }
 vec3 swAmbAt( vec3 p ) { return kwLightAt( p.y - KW_LEVEL ); }
 // radiance scattered toward the eye by a small krill-coloured scatterer
@@ -133,7 +132,7 @@ vec3 swScatter( vec3 p, vec3 wo, vec3 albedo, float shadow ) {
 	// faint forward-scattered rim when backlit, never as bright as the water
 	vec3 sun = swSunAt( p ) * shadow * KW_SUNCOL * ( 0.03 + 0.03 * ph );
 	vec3 amb = swAmbAt( p ) * ( KW_W0 * 0.7 + vec3( 0.006 ) );
-	return albedo * ( sun * 2.7 + amb );
+	return albedo * ( sun + amb );
 }
 `;
 
@@ -176,6 +175,7 @@ const DENS_MAX = 1.0; // boids/m^3 mapped to 1.0 in the grid
 // × 0.3 cm² each), so light through a 25 m patch is cut to ~10%
 const SIGMA_PER_BOID = 0.3;
 const SLICES = 40;
+const INFLATE = 1.3;
 
 const volumeVert = /* glsl */ `
 attribute vec2 corner;
@@ -220,6 +220,7 @@ uniform vec3 uWhaleFwd;
 uniform float uWhaleLen;
 uniform float uLunge;
 uniform float uDebug;
+uniform float uInflate;
 varying float vThick;
 varying vec3 vRayDir;
 #include <fog_pars_fragment>
@@ -242,11 +243,15 @@ void main() {
 	// the flock's faces into billows without moving the mass.
 	vec3 wq = p * 0.07 + vec3( 0.0, uTime * 0.012, 0.0 );
 	vec3 warp = vec3( vNoise( wq ), vNoise( wq + vec3( 5.2, 1.3, 2.8 ) ), vNoise( wq + vec3( 1.7, 9.2, 4.1 ) ) ) - 0.5;
-	vec3 uvw0 = ( p - uBoxMin ) / uBoxSize;
+	vec3 uvw0 = ( p - uBoxMin - 0.5 * uBoxSize ) / ( uBoxSize * uInflate ) + 0.5;
 	if ( any( lessThan( uvw0, vec3( 0.0 ) ) ) || any( greaterThan( uvw0, vec3( 1.0 ) ) ) ) discard;
-	vec2 g = texture( uGrid, ( p + warp * 7.0 - uBoxMin ) / uBoxSize ).rg;
+	// the density field is drawn ~1.3x the flock's extent: the boids are the
+	// dense core the whale feeds in, the halo the diffuse edge of a real patch
+	vec3 boxC = uBoxMin + 0.5 * uBoxSize;
+	vec2 g = texture( uGrid, ( boxC + ( p - boxC ) / uInflate + warp * 6.0 - uBoxMin ) / uBoxSize ).rg;
 	vec3 edge = min( uvw0, 1.0 - uvw0 );
-	float n = g.r * uDensMax * smoothstep( 0.0, 0.22, min( edge.x, min( edge.y, edge.z ) ) ); // boids / m^3
+	// cut the blur tails (grazing rays integrate them over tens of metres)
+	float n = max( g.r - 0.05, 0.0 ) * ( uDensMax / 0.95 ) * smoothstep( 0.02, 0.3, min( edge.x, min( edge.y, edge.z ) ) ); // boids / m^3
 	// patchiness: krill aggregate in sheets and knots that slowly churn
 	float nz = vNoise( p * 0.22 + vec3( 0.0, uTime * 0.04, uTime * 0.03 ) ) * 0.6
 		+ vNoise( p * 0.75 - vec3( uTime * 0.07, 0.0, 0.0 ) ) * 0.4;
@@ -257,6 +262,15 @@ void main() {
 	float rad = length( rel - uWhaleFwd * along );
 	float body = uWhaleLen * ( 0.11 + 0.14 * uLunge );
 	n *= smoothstep( body * 0.8, body * 1.9, rad );
+	// gameplay readability: thin the swarm near the lens and along the line of
+	// sight to the whale (the follow camera sits 1-2 body lengths behind it)
+	vec3 cw = uWhalePos - cameraPosition;
+	float cwl = max( length( cw ), 1e-3 );
+	float ts = clamp( dot( p - cameraPosition, cw ) / ( cwl * cwl ), 0.0, 1.0 );
+	float los = length( p - cameraPosition - cw * ts );
+	float tunnel = ts < 0.999 ? smoothstep( uWhaleLen * 0.15, uWhaleLen * 0.45, los ) : 1.0;
+	n *= mix( 0.15, 1.0, tunnel );
+	n *= smoothstep( 1.5, 7.0, length( p - cameraPosition ) );
 	float sigma = n * uSigma;
 	float a = 1.0 - exp( - sigma * ds );
 	if ( a < 0.002 ) discard;
@@ -265,10 +279,10 @@ void main() {
 	vec3 col = swScatter( p, - dir, albedo, g.g );
 	gl_FragColor = vec4( col, a );
 	// water model along the view ray. Readability compromise (like KW_FLOOR):
-	// beyond ~25 m the patch is fogged as if up to 35% closer, so a hunted
+	// beyond ~20 m the patch is fogged as if up to 2x closer, so a hunted
 	// swarm still reads as a smudge at 60–100 m in this turbid water.
 	float dCam = length( vKwWorld - cameraPosition );
-	vec3 pFog = cameraPosition + ( vKwWorld - cameraPosition ) * mix( 1.0, 0.65, smoothstep( 25.0, 90.0, dCam ) );
+	vec3 pFog = cameraPosition + ( vKwWorld - cameraPosition ) * mix( 1.0, 0.5, smoothstep( 20.0, 90.0, dCam ) );
 	gl_FragColor.rgb = kwWater( gl_FragColor.rgb, cameraPosition, pFog );
 	if ( uDebug > 0.5 ) gl_FragColor = vec4( g.r, g.g, n, a );
 	if ( uDebug > 1.5 ) gl_FragColor = vec4( 1.0, 0.0, 0.0, 1.0 );
@@ -315,6 +329,7 @@ class SwarmVolume {
         uDensMax: { value: DENS_MAX },
         uSigma: { value: SIGMA_PER_BOID },
         uDebug: { value: 0 },
+        uInflate: { value: INFLATE },
       },
       vertexShader: volumeVert,
       fragmentShader: volumeFrag,
@@ -393,7 +408,7 @@ class SwarmVolume {
     u.uBoxMin.value.set(x0, y0, z0);
     u.uBoxSize.value.set(x1 - x0, y1 - y0, z1 - z0);
     this.center.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
-    this.radius = 0.5 * Math.hypot(x1 - x0, y1 - y0, z1 - z0);
+    this.radius = 0.5 * INFLATE * Math.hypot(x1 - x0, y1 - y0, z1 - z0);
     u.uCenter.value.copy(this.center);
     u.uRadius.value = this.radius;
   }
@@ -473,12 +488,12 @@ void main() {
 	// carapace glints: a krill twisting past the specular angle
 	float tw = sin( uTime * ( 1.3 + 5.0 * s1 ) + aSeed * 57.0 + dist0 * uTime * 9.0 );
 	float glint = pow( max( tw, 0.0 ), mix( 90.0, 14.0, dist0 ) );
-	col += glint * swSunAt( p ) * KW_SUNCOL * ( 1.6 + 5.0 * dist0 ) * vec3( 1.0, 0.92, 0.85 );
+	col += glint * ( swSunAt( p ) * KW_SUNCOL + swAmbAt( p ) * KW_W0 * 4.0 * dist0 ) * ( 1.6 + 9.0 * dist0 ) * vec3( 1.0, 0.92, 0.85 );
 	// photophores: blue-green bioluminescent flashes when disturbed (constant
 	// absolute radiance: invisible by day, sparks at night)
 	float bl = pow( max( sin( uTime * ( 5.0 + 9.0 * s1 ) + aSeed * 31.0 ), 0.0 ), 20.0 ) * dist0;
 	col += bl * vec3( 0.03, 0.34, 0.5 ) * 0.9;
-	vAlpha = min( 1.0, vAlpha * ( 1.0 + 1.5 * bl ) );
+	vAlpha = min( 1.0, vAlpha * ( 1.0 + 1.5 * bl + 2.0 * glint * dist0 ) );
 	vColor = kwWater( col, cameraPosition, p );
 }
 `;
@@ -606,7 +621,7 @@ void main() {
 	vec3 sunT = swSunAt( vKwWorld );
 	float ndl = max( dot( n, KW_SUNW ), 0.0 );
 	float back = pow( max( dot( - e, KW_SUNW ), 0.0 ), 3.0 );
-	vec3 lit = c * ( sunT * KW_SUNCOL * 2.7 * ( ndl * 0.25 + back * 0.35 + 0.05 ) + swAmbAt( vKwWorld ) * ( KW_W0 * 2.0 + vec3( 0.02 ) ) );
+	vec3 lit = c * ( sunT * KW_SUNCOL * ( ndl * 0.25 + back * 0.35 + 0.05 ) + swAmbAt( vKwWorld ) * ( KW_W0 * 2.0 + vec3( 0.02 ) ) );
 	// wet carapace specular
 	vec3 h = normalize( KW_SUNW + e );
 	lit += sunT * KW_SUNCOL * pow( max( dot( n, h ), 0.0 ), 60.0 ) * 1.5 * ( 1.0 - eye );
@@ -671,7 +686,7 @@ void main() {
 	float fres = 0.75 + 0.25 * pow( 1.0 - max( dot( n, e ), 0.0 ), 3.0 );
 	vec3 col = env * silver * fres;
 	// dark blue-green back, matte
-	vec3 backC = vec3( 0.05, 0.12, 0.15 ) * ( sunT * KW_SUNCOL * 2.7 * max( dot( n, KW_SUNW ), 0.0 ) * 0.3 + ambT * ( KW_W0 * 2.0 + vec3( 0.02 ) ) );
+	vec3 backC = vec3( 0.05, 0.12, 0.15 ) * ( sunT * KW_SUNCOL * max( dot( n, KW_SUNW ), 0.0 ) * 0.3 + ambT * ( KW_W0 * 2.0 + vec3( 0.02 ) ) );
 	col = mix( col, backC, dorsal );
 	col = mix( col, col * 0.7 + ambT * KW_W0 * 0.9, belly * 0.5 );
 	// eye
@@ -740,7 +755,7 @@ export class KrillSwarmView {
     sg.setAttribute('aOff', new THREE.BufferAttribute(aOff, 3));
     sg.setAttribute('aSeed', new THREE.BufferAttribute(aSeed, 1));
     this.speckMat = makeWaterAware(new THREE.ShaderMaterial({
-      uniforms: { ...swarmUniforms, uBoids: { value: this.boids.texture }, uSpread: { value: 1.6 }, uLen: { value: 0.045 } },
+      uniforms: { ...swarmUniforms, uBoids: { value: this.boids.texture }, uSpread: { value: 2.4 }, uLen: { value: 0.045 } },
       vertexShader: speckVert,
       fragmentShader: speckFrag,
       transparent: true,
@@ -771,6 +786,12 @@ export class KrillSwarmView {
     this.volume.build(sys);
     const cam = camera.position;
     const dc = cam.distanceTo(this.volume.center) - this.volume.radius;
+    // underwater the surface's underside is opaque (Snell's window) and drawn
+    // at renderOrder 10: swarms must come after it; from the air, before it
+    const under = cam.y < 0;
+    this.volume.mesh.renderOrder = under ? 12 : 5;
+    this.specks.renderOrder = under ? 13 : 6;
+    this.near.renderOrder = under ? 14 : 7;
     const len = 0.045 * lenScale;
     this.speckMat.uniforms.uLen.value = len;
     this.nearMat.uniforms.uLen.value = len;
@@ -840,6 +861,7 @@ export class FishSchoolView {
     if (n) this.center.set(x / n, y / n, z / n);
     this.boids.write(sys, this.center.x, this.center.y, this.center.z, FISH_COMPRESS);
     this.mesh.visible = n > 0 && camera.position.distanceTo(this.center) < 120;
+    this.mesh.renderOrder = camera.position.y < 0 ? 14 : 7;
   }
 
   dispose() {
