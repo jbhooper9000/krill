@@ -257,7 +257,6 @@ uniform vec3 uWhalePos;
 uniform vec3 uWhaleFwd;
 uniform float uWhaleLen;
 uniform float uLunge;
-uniform float uDebug;
 uniform float uInflate;
 varying float vThick;
 varying vec3 vRayDir;
@@ -317,8 +316,6 @@ void main() {
 	float dCam = length( vKwWorld - cameraPosition );
 	vec3 pFog = cameraPosition + ( vKwWorld - cameraPosition ) * mix( 1.0, 0.5, smoothstep( 20.0, 90.0, dCam ) );
 	gl_FragColor.rgb = kwWater( gl_FragColor.rgb, cameraPosition, pFog );
-	if ( uDebug > 0.5 ) gl_FragColor = vec4( g.r, g.g, n, a );
-	if ( uDebug > 1.5 ) gl_FragColor = vec4( 1.0, 0.0, 0.0, 1.0 );
 }
 `;
 
@@ -362,7 +359,6 @@ class SwarmVolume {
         uSlices: { value: SLICES },
         uDensMax: { value: DENS_MAX },
         uSigma: { value: SIGMA_PER_BOID },
-        uDebug: { value: 0 },
         uInflate: { value: INFLATE },
       },
       vertexShader: volumeVert,
