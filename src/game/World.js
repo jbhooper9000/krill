@@ -16,6 +16,7 @@ import {
   makeWaterAware,
   installWaterShading,
 } from './WaterMedium.js';
+import { Bioluminescence } from './Bioluminescence.js';
 
 const SURFACE_Y = 0;
 const _tmpColor = new THREE.Color();
@@ -278,6 +279,8 @@ export class World {
     this._buildKelp();
     this._buildSnow();
     this._buildBackground();
+    /** night plankton bioluminescence wake around the whale (Bioluminescence.js) */
+    this.bio = new Bioluminescence(scene);
     if (options.flatFloor === false) {
       this.floor.visible = false;
       this._rocks.visible = false;
@@ -658,6 +661,12 @@ export class World {
       }
     }
 
+    // plankton bioluminescence: emits only in the dark (absolute radiance)
+    {
+      const darkness = 1 - THREE.MathUtils.smoothstep(this.lightLevel, 0.02, 0.2);
+      this.bio.update(dt, darkness, this.waterLevel, this._snowMat.uniforms.uPixelScale.value);
+    }
+
     // marine snow only exists (and is only visible) under water
     this.snow.visible = this.isCameraUnderwater;
     if (this.snow.visible) {
@@ -694,6 +703,7 @@ export class World {
 
   // Floating origin: the scene shifted by -(dx, dz) (see Terrain.onRebase).
   rebase(dx, dz) {
+    if (this.bio) this.bio.rebase(dx, dz);
     const p = this._snowPos;
     for (let i = 0; i < this._snowCount; i++) { p[i * 3] -= dx; p[i * 3 + 2] -= dz; }
     this.snow.geometry.attributes.position.needsUpdate = true;
