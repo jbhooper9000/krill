@@ -373,6 +373,37 @@ export class UI {
     this._hide($('hud-prompt'));
   }
 
+  // End-of-day summary (design doc 3.3), shown on the pause screen.
+  // summary: { day, species, condition, target, stats, outcome, final }
+  showDayCard(summary, onNext) {
+    this._condition = { value: summary.condition, target: summary.target };
+    this.setPaused(true);
+    const s = summary.stats;
+    const n = (v) => `<b>${Math.round(v).toLocaleString()}</b>`;
+    $('pause-screen').classList.add('daycard');
+    document.querySelector('#pause-screen .pause-title').textContent = `Day ${summary.day} at sea`;
+    $('pause-stats').innerHTML =
+      `${n(s.kg)} kg of krill · ${n(s.dives)} dives · ${n(s.lunges)} lunges · best lunge ${n(s.bestLunge)} · ` +
+      `${n(s.breaches)} ${s.breaches === 1 ? 'breach' : 'breaches'}` +
+      (s.blackouts ? ` · ${n(s.blackouts)} ${s.blackouts === 1 ? 'blackout' : 'blackouts'}` : '') +
+      `<div class="day-outcome">${summary.outcome}</div>`;
+    const btn = $('resume-btn');
+    btn.firstChild.textContent = summary.final ? 'Start again ' : 'Next day ';
+    this._dayCardNext = summary.final ? () => window.location.reload() : onNext;
+  }
+
+  // Called by the resume action: true if it closed a day card.
+  consumeDayCard() {
+    const next = this._dayCardNext;
+    if (!next) return false;
+    this._dayCardNext = null;
+    $('pause-screen').classList.remove('daycard');
+    document.querySelector('#pause-screen .pause-title').textContent = 'Paused';
+    $('resume-btn').firstChild.textContent = 'Resume ';
+    next();
+    return true;
+  }
+
   setPaused(paused) {
     $('pause-screen').classList.toggle('hidden', !paused);
     $('hud').classList.toggle('paused', paused);

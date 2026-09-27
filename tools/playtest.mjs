@@ -132,7 +132,7 @@ const scenarios = {
     await sleep(300);
     await shot('hud-1b-lunge-burst');
     // dark water near the floor, diving
-    await evaljs(`(() => { const c = krill.controller; c.position.y = c.bounds.minY + 6; c._aimPitchTarget = -0.5; return 1; })()`);
+    await evaljs(`(() => { const c = krill.controller; c.position.y = krill.terrain.heightAt(c.position.x, c.position.z) + 12; c._aimPitchTarget = -0.5; return 1; })()`);
     await sleep(1500);
     console.log('dark', JSON.stringify(await hudState()));
     await shot('hud-2-dark');

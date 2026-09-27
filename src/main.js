@@ -86,6 +86,7 @@ if (autostart) {
 if (autostart || params.has('test')) window.krill = game;
 
 function resume() {
+  if (ui.consumeDayCard()) return; // the day card's "Next day"
   game.paused = false;
   ui.setPaused(false);
   game.input.lock();
