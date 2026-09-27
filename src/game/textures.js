@@ -352,3 +352,52 @@ export function makeUnderwaterEnvCube({ window: win, horizon, deep, size = 32 } 
   cube.needsUpdate = true;
   return cube;
 }
+
+// --- Spray / mist puff atlas (2x2 cells, white on transparent) ---
+// Each cell is a different irregular puff: a cluster of soft blobs with a
+// ragged, noisy edge (no round "cotton balls"), for splash mist, blow vapour
+// and underwater bubble clouds. Sample cell k at (uv * 0.5 + offset).
+export function makeMistAtlas(seed = 11) {
+  const size = 256;
+  const half = size / 2;
+  let r = seed;
+  const rand = () => ((r = (r * 16807) % 2147483647) / 2147483647);
+  const c = canvas(size, (ctx) => {
+    ctx.clearRect(0, 0, size, size);
+    for (let cell = 0; cell < 4; cell++) {
+      const ox = (cell % 2) * half, oy = Math.floor(cell / 2) * half;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(ox, oy, half, half);
+      ctx.clip();
+      const blobs = 26 + cell * 6;
+      for (let i = 0; i < blobs; i++) {
+        const a = rand() * Math.PI * 2;
+        const d = Math.pow(rand(), 0.8) * half * 0.26;
+        const x = ox + half / 2 + Math.cos(a) * d * (1 + 0.3 * cell / 3);
+        const y = oy + half / 2 + Math.sin(a) * d * 0.85;
+        const rad = half * (0.06 + rand() * 0.16) * (1 - (0.6 * d) / (half * 0.3));
+        const al = 0.05 + rand() * 0.12;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
+        g.addColorStop(0, `rgba(255,255,255,${al})`);
+        g.addColorStop(0.6, `rgba(255,255,255,${al * 0.45})`);
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, rad, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // fine droplet speckle for texture
+      for (let i = 0; i < 160; i++) {
+        const a = rand() * Math.PI * 2;
+        const d = Math.pow(rand(), 0.6) * half * 0.36;
+        ctx.fillStyle = `rgba(255,255,255,${0.05 + rand() * 0.12})`;
+        ctx.fillRect(ox + half / 2 + Math.cos(a) * d, oy + half / 2 + Math.sin(a) * d, 1 + rand() * 1.5, 1 + rand() * 1.5);
+      }
+      ctx.restore();
+    }
+  });
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.NoColorSpace; // used as coverage, not colour
+  return t;
+}
