@@ -191,12 +191,20 @@ float kwCaustics( vec3 wp, float depth ) {
 	return max( 0.0, mix( 1.0, min( l / mean, 3.2 ), amp ) );
 }
 
-vec3 kwFloorLight() { return KW_FLOOR * vec3( 0.05, 0.35, 1.0 ); }
+// The artistic floor has the SAME spectral shape as the real light at that
+// depth (computed in log space so it never underflows), slightly biased blue.
+// A fixed-hue floor made the water navy while white parts (humpback flippers)
+// showed the true cyan-green light, so they read as glowing at 40-60 m.
+vec3 kwFloorLight( float y ) {
+	vec3 tau = kwTauDown( y );
+	float m = min( tau.r, min( tau.g, tau.b ) );
+	return KW_FLOOR * exp( - ( tau - m ) ) * vec3( 0.5, 0.85, 1.0 );
+}
 
 // Light-at-depth for the diffuse (ambient / sky) field, with a small bluish
 // floor so deep scenes stay legible (a game compromise, documented).
 vec3 kwLightAt( float y ) {
-	return exp( - kwTauDown( y ) ) + kwFloorLight();
+	return exp( - kwTauDown( y ) ) + kwFloorLight( y );
 }
 
 vec3 kwAmbientTransmit( vec3 wp ) {
@@ -205,7 +213,7 @@ vec3 kwAmbientTransmit( vec3 wp ) {
 // For specular IBL: the artistic floor is mostly left out, so thin flat parts
 // (flukes, flippers) do not mirror a glowing "window" in the dark at depth.
 vec3 kwAmbientTransmitSpec( vec3 wp ) {
-	return exp( - kwTauDown( wp.y - KW_LEVEL ) ) + 0.15 * kwFloorLight();
+	return exp( - kwTauDown( wp.y - KW_LEVEL ) ) + 0.15 * kwFloorLight( wp.y - KW_LEVEL );
 }
 
 // Direct key light arriving at wp: slant-path attenuation * projected caustics.
@@ -260,7 +268,7 @@ vec3 kwWaterT( vec3 col, vec3 ro, vec3 p, out vec3 T ) {
 	a = mix( a, vec3( 1e-4 ), step( abs( a ), vec3( 1e-4 ) ) );
 	vec3 g = ( 1.0 - exp( - a * s ) ) / a;
 	vec3 W = kwWaterRadiance( dir );
-	vec3 ins = W * ( c * g * exp( - kwTauDown( startY ) ) + kwFloorLight() * ( 1.0 - T ) );
+	vec3 ins = W * ( c * g * exp( - kwTauDown( startY ) ) + kwFloorLight( startY ) * ( 1.0 - T ) );
 	return col * T + ins;
 }
 

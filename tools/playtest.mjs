@@ -506,6 +506,23 @@ const scenarios = {
       if (name) await shot(name);
     }
   },
+  // Whale readability in Monterey water (playtest 2 N2/N4/#19): default
+  // follow distance (1.1 L) and side views at 20 / 55 m, fins at 50 m.
+  // Best with PT_GPU=1. Cameras are relative to the whale (floating origin).
+  async readability() {
+    await hideHud();
+    const pin = (y, dist, side) => evaljs(`(() => { const c = krill.controller; c.position.y = ${y}; const L = c.sp.length;
+      c._updateCamera = function(){ const p = this.position; ${side
+        ? `this.camera.position.set(p.x + L*${dist}, p.y + L*0.1, p.z + L*0.25); this.camera.lookAt(p.x, p.y, p.z);`
+        : `const f = this.forwardVector(); this.camera.position.set(p.x - f.x*L*${dist}, p.y + L*0.12, p.z - f.z*L*${dist}); this.camera.lookAt(p.x + f.x*L, p.y, p.z + f.z*L);`} };
+      krill.effects.resetExposure && krill.effects.resetExposure(); return 1; })()`);
+    for (const [y, d, side, name] of [[-20, 1.1, false, 'follow-20m'], [-20, 1.1, true, 'side-20m'], [-55, 1.1, false, 'follow-55m'],
+      [-55, 1.1, true, 'side-55m'], [-50, 0.6, true, 'fins-50m']]) {
+      await pin(y, d, side);
+      await sleep(900);
+      await shot(`read-${name}`);
+    }
+  },
   // Time of day (World.setTimeOfDay): underwater follow cam, looking up, and
   // above the surface, at dawn / morning / noon / golden hour / dusk / night.
   async daynight() {

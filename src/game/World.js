@@ -55,7 +55,7 @@ export const WATER_PRESETS = {
 };
 
 const OPTICS = {
-  floor: 0.045, // minimum light at depth (game readability)
+  floor: 0.018, // minimum light at depth (game readability; higher made white fins glow)
   caustics: 0.95,
   causticScale: 0.6, // caustic cells per metre
   disc: 30, // key-light disc radiance / irradiance
