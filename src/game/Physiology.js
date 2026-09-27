@@ -13,6 +13,7 @@ export class Physiology {
     this.blackout = false;
     this._blowTimer = 0.4;
     this._surfaced = false;
+    this._sinceSurface = 99; // seconds since the blowhole was last clear
     this._stomachWarned = false;
     // day stats for the summary card
     this.stats = { kg: 0, dives: 0, lunges: 0, breaches: 0, blackouts: 0, bestLunge: 0 };
@@ -23,7 +24,7 @@ export class Physiology {
     return this.stomach >= 1;
   }
 
-  // ctx: { atSurface, exertion (0..~2 thrust), deepBreath }
+  // ctx: { atSurface, airborne, exertion (0..~2 thrust), deepBreath }
   // Returns an event name or null: 'blow' | 'blackout' | 'recovered' | 'dive' | 'stomach-full'
   update(dt, ctx) {
     const sp = this.sp;
@@ -35,17 +36,25 @@ export class Physiology {
     this.stomach = Math.max(0, this.stomach - dt / 90);
     if (this.stomach < 0.85) this._stomachWarned = false;
 
+    // airborne (breach): no drain, no blows, not a dive
+    if (ctx.airborne) return null;
+
     if (ctx.atSurface) {
       if (!this._surfaced) {
         this._surfaced = true;
-        this._blowTimer = 0.4; // first blow soon after the blowhole clears
+        // first blow soon after the blowhole clears — unless we only dipped
+        // under for a moment (no farming blows by bobbing)
+        if (this._sinceSurface > 4) this._blowTimer = 0.6;
       }
-      // a series of blows, each ~2 s apart (3 s and bigger when holding a deep breath)
+      this._sinceSurface = 0;
+      // a series of blows. Real surface intervals are ~1-3 min per 5-8 min
+      // dive (15-45 s at the 4x physiology clock): ~3.5 s between blows,
+      // +12% each; holding a deep breath is slower but fills more per blow
       if (this.o2 < 1) {
         this._blowTimer -= dt;
         if (this._blowTimer <= 0) {
-          this.o2 = Math.min(1, this.o2 + (ctx.deepBreath ? 0.35 : 0.25));
-          this._blowTimer = ctx.deepBreath ? 3 : 2;
+          this.o2 = Math.min(1, this.o2 + (ctx.deepBreath ? 0.24 : 0.12));
+          this._blowTimer = ctx.deepBreath ? 5 : 3.5;
           event = 'blow';
         }
       }
@@ -54,7 +63,8 @@ export class Physiology {
         event = 'recovered';
       }
     } else {
-      if (this._surfaced && !this.blackout) {
+      this._sinceSurface += dt;
+      if (this._surfaced && !this.blackout && this._sinceSurface > 4) {
         this._surfaced = false;
         this.stats.dives++;
         event = 'dive';

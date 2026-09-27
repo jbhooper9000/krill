@@ -77,7 +77,13 @@ export class Game {
     this.effects.resize(w, h);
   }
 
-  start(speciesId) {
+  // Async: waits for the bathymetry (manifest + coarse grids + start tiles) so
+  // the whale, floor clamp and krill sites use real heights, not the fallback.
+  async start(speciesId) {
+    if (this._starting || this.running) return;
+    this._starting = true;
+    if (!this.terrain.loaded) await this.terrain.ready;
+    this._starting = false;
     this._clearPreview();
     this.speciesId = speciesId;
     this.whale = new Whale(speciesId);
@@ -97,6 +103,8 @@ export class Game {
     // time of day drives diel vertical migration of the krill
     this.clock = new Clock(9);
     this.phys = new Physiology(sp);
+    this._dayTime = 0; // game seconds into today's session
+    this.day = 1;
 
     this.krill = new KrillManager(this.scene, bounds, this.terrain);
     this.krill.spawnAround(this.controller.position, this._krillY());
@@ -187,7 +195,7 @@ export class Game {
       this.surge = Math.min(1, this.surge + (eaten * bonus) / (this.whale.sp.breachKrill * TUNING.breachCost));
     }
     const cost = this._breachCost();
-    c.breachReady = this.surge >= cost && c.mode === 'swim';
+    c.breachReady = this.surge >= cost && c.mode === 'swim' && !this.phys.blackout;
     this.ui.setBreach(this.surge, c.breachReady, cost);
   }
 
@@ -235,11 +243,49 @@ export class Game {
   }
 
   // Oxygen, blows, blackout, Condition and stomach.
+  // A session is a day at sea (design doc 3.3): after 24 game hours, or if the
+  // whale starves, show the day card. Condition carries over to the next day.
+  _checkDayEnd() {
+    const phys = this.phys;
+    const dayOver = this._dayTime * TUNING.timeCompression >= 24 * 3600;
+    const starved = phys.condition <= 0;
+    if (!dayOver && !starved) return;
+    const reached = phys.condition >= phys.target;
+    const outcome = starved
+      ? 'Too weak to go on — the season ends here'
+      : reached
+        ? 'Condition reached — ready for the migration south'
+        : phys.condition >= phys.target * 0.75
+          ? 'A good day at sea'
+          : 'Underweight — migration odds poor';
+    this.paused = true;
+    if (document.exitPointerLock) document.exitPointerLock();
+    this.ui.showDayCard?.({
+      day: this.day,
+      species: this.whale.sp.name,
+      condition: phys.condition,
+      target: phys.target,
+      stats: { ...phys.stats },
+      outcome,
+      final: starved,
+    }, () => this._nextDay());
+  }
+
+  _nextDay() {
+    this.day++;
+    this._dayTime = 0;
+    this.phys.stats = { kg: 0, dives: 0, lunges: 0, breaches: 0, blackouts: 0, bestLunge: 0 };
+    this.paused = false;
+    this.ui.setPaused(false);
+    this.input.lock();
+  }
+
   _updatePhysiology(dt, input) {
     const c = this.controller;
     const phys = this.phys;
     const ev = phys.update(dt, {
       atSurface: c.atSurface,
+      airborne: c.mode === 'air',
       exertion: c.thrust,
       deepBreath: c.atSurface && input.ascend,
     });
@@ -292,6 +338,8 @@ export class Game {
       }
       this.controller.update(dt, input);
       this.clock.update(dt);
+      this._dayTime += dt;
+      this.world.setTimeOfDay?.(this.clock.hours);
 
       const room = Math.floor((1 - this.phys.stomach) * this.whale.sp.stomachKrill);
       const eaten = this.krill.update(dt, this._elapsed, this.whale, this.controller, true, { krillY: this._krillY(), room });
@@ -301,6 +349,7 @@ export class Game {
       }
       this._updateSurge(eaten);
       this._updatePhysiology(dt, input);
+      this._checkDayEnd();
       this.splash.update(dt, this.camera);
 
       this.world.update(dt, this.camera);

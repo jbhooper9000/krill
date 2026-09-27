@@ -344,6 +344,10 @@ export class Whale {
     // dielectric base, a faint low-intensity clearcoat for the film and a
     // little sheen for the soft grazing-angle lift seen in footage. Under water
     // the environment is diffuse, so the resulting specular is broad and soft.
+    // Above the water (breach, logging at the surface) the skin is sheeting
+    // wet: per fragment we raise the clearcoat and drop its roughness when the
+    // point is in air, giving crisp sun highlights and sky reflections. Sheen
+    // is kept low: at depth its grazing lift made fin edges glow.
     const mat = new THREE.MeshPhysicalMaterial({
       map,
       color: 0xffffff,
@@ -351,7 +355,7 @@ export class Whale {
       metalness: 0,
       clearcoat: 0.12,
       clearcoatRoughness: 0.5,
-      sheen: 0.35,
+      sheen: 0.15,
       sheenRoughness: 0.6,
       sheenColor: new THREE.Color(0x7f98a4),
       envMapIntensity: 0.9,
@@ -363,6 +367,20 @@ export class Whale {
       // Game disposes material.map; take the normal map with it
       mat.addEventListener('dispose', () => normalMap.dispose());
     }
+    mat.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <lights_physical_fragment>',
+        /* glsl */ `#include <lights_physical_fragment>
+	#ifdef USE_FOG
+	{
+		float kwAir = smoothstep( - 0.05, 0.15, vKwWorld.y - KW_LEVEL );
+		material.clearcoat = mix( material.clearcoat, 0.85, kwAir );
+		material.clearcoatRoughness = mix( material.clearcoatRoughness, 0.1, kwAir );
+		material.roughness = mix( material.roughness, 0.5, kwAir );
+	}
+	#endif`
+      );
+    };
     return mat;
   }
 
@@ -439,8 +457,8 @@ export class Whale {
     const pocket = jaw.baleen ? POCKET_RORQUAL : POCKET_SPERM;
     this._pocket = pocket;
     const pocketColors = jaw.baleen
-      ? [0x2a2724, 0x1b1917, 0x5c534a, 0x4a302e, 0x5a3a38, 0x9c7c76, 0xb9b1a8]
-      : [0xd8d2c8, 0xd0c8be, 0xc8b6ae, 0xa88e88, 0xb89c96, 0xd6ccc2, 0xe2dcd2];
+      ? [0x2a2724, 0x1b1917, 0x4a433c, 0x2e1e1d, 0x3c2826, 0x5e4845, 0x7d736c]
+      : [0xd8d2c8, 0xc8c0b6, 0xa8968e, 0x6e5a56, 0x8a726c, 0xc6bcb2, 0xe2dcd2];
 
     for (let i = 0; i < Nr; i++) {
       const u = us[i];

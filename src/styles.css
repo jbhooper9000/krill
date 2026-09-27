@@ -1179,3 +1179,13 @@ button {
     margin-top: 16px;
   }
 }
+
+/* ---------- End-of-day card (reuses the pause screen) ---------- */
+#pause-screen.daycard .controls-list { display: none; }
+.day-outcome {
+  margin-top: 14px;
+  font-weight: 200;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  color: var(--ink, #eaf6f8);
+}

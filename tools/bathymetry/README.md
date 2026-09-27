@@ -13,7 +13,7 @@ endpoint as raw little-endian Float32 (`format=bsq`, `pixelType=F32`, bilinear):
 ```
 https://gis.ngdc.noaa.gov/arcgis/rest/services/DEM_mosaics/DEM_global_mosaic/ImageServer/exportImage
   ?bbox=<west>,<south>,<east>,<north>&bboxSR=4326&imageSR=4326&size=<nx>,<ny>
-  &format=bsq&pixelType=F32&interpolation=RSP_BilinearInterpolation&f=image
+  &adjustAspectRatio=false&format=bsq&pixelType=F32&interpolation=RSP_BilinearInterpolation&f=image
 ```
 
 The service mosaics the best NCEI DEM at each point. Over Monterey Bay it
@@ -38,6 +38,49 @@ GMRT GridServer (`https://www.gmrt.org/services/GridServer`) was tried first; on
 2026-09-27 every request returned `504 Gateway Time-out`. NOAA CoastWatch ERDDAP
 (`etopo180`, `ETOPO_2022_v1_15s`) worked but is only 1'/15" resolution, so the NCEI
 mosaic was used.
+
+**`adjustAspectRatio=false` is required.** Our pixels are not square in degrees
+(30 m is 3.37e-4° of longitude but 2.70e-4° of latitude). By default the service
+grows the bbox so pixels become square in degrees, which stretches every request
+N–S by 1/cos(lat0) ≈ 1.25 about its own centre. The first build had this bug:
+cliffs of up to 770 m at every tile-row seam and levels that disagreed by hundreds
+of metres (playtest review 1, issue #1).
+
+## Build checks
+
+`build.mjs` refuses to write anything (exit 1, `--force` to override) unless:
+
+1. **Seams:** the shared row between vertically adjacent 30 m tiles agrees
+   (max |Δh| ≤ 5 m, mean ≤ 0.5 m). E–W seams come from one request.
+2. **Levels agree:** on a 40×40 lattice, 120 m vs 30 m (the 30 m data averaged
+   over the coarse cell) has median |Δh| ≤ 5 m and p90 ≤ 30 m; 500 m vs 30 m
+   has median ≤ 15 m and p90 ≤ 120 m.
+3. **Coastline control points** fall on the right side of the waterline:
+   Santa Cruz wharf end (water), Santa Cruz Boardwalk (land), Moss Landing
+   harbour mouth (water), Moss Landing power plant (land), Monterey Municipal
+   Wharf 2 end (water), Point Pinos lighthouse (land, at 30 m and 120 m), the
+   Monterey Canyon head 1.5 km off Moss Landing (80–250 m deep) and the Santa
+   Cruz shelf at 36.90 N 122.05 W (20–70 m).
+
+Results of the committed build (2026-09-27):
+
+| Check | Result |
+| --- | --- |
+| N–S tile seams | max 0.00 m, mean 0.000 m |
+| 120 m vs 30 m | median 0.3 m, p90 2.8 m |
+| 500 m vs 30 m | median 1.8 m, p90 13.6 m |
+| Santa Cruz wharf end | −9.1 m |
+| Santa Cruz Boardwalk | +4.1 m |
+| Moss Landing harbour mouth | −3.5 m |
+| Moss Landing power plant | +9.3 m |
+| Monterey Wharf 2 end | −7.6 m |
+| Point Pinos lighthouse | +18.5 m (30 m), +17.5 m (120 m) |
+| Canyon head off Moss Landing | −137.8 m (30 m), −128.5 m (120 m) |
+| Santa Cruz shelf | −51.5 m |
+
+For comparison, the buggy build failed 7 of these (seams 768 m max, levels 95 m
+median apart, Point Pinos under water). An independent check is the MARS cabled
+observatory node, charted at 891 m: the grid gives 886 m.
 
 ## Projection
 
@@ -71,5 +114,11 @@ Samples are gzip-compressed raw **little-endian Int16**, row-major, rows north�
 Map pixel ↔ world: `px = (x - xMin) / size * 512`, `py = (z - zMin) / size * 512`
 (values in `manifest.maps`).
 
-Heights range from −3,087 m (lower Monterey Canyon, west edge) to +977 m (Santa
+Heights range from −3,087 m (lower Monterey Canyon, west edge) to +963 m (Santa
 Cruz Mountains) in L0.
+
+`regions.json` also lists `reefs`: rocky-reef zones (Cannery Row, Pacific Grove,
+Point Pinos, Asilomar, Cypress Point, Carmel Bay, Point Lobos, the Santa Cruz
+points, Davenport), and whether giant kelp grows there. The runtime uses them for
+reef rock, boulders and kelp forests. The canyon corridors were auto-traced
+(deepest path) on the corrected grids.

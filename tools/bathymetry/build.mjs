@@ -59,6 +59,13 @@ const SERVICE = 'https://gis.ngdc.noaa.gov/arcgis/rest/services/DEM_mosaics/DEM_
 // Request an nx x ny grid of point samples whose first sample sits at
 // (xMin, zMin) with spacing res. ArcGIS bboxes are pixel *edges*, so the bbox
 // is padded by half a cell to put pixel centres exactly on our grid nodes.
+//
+// adjustAspectRatio=false is essential: our pixels are not square in degrees
+// (a 30 m cell spans 3.37e-4 deg of longitude but only 2.70e-4 deg of latitude),
+// and by default ArcGIS silently grows the bbox so pixels become square in
+// degrees, stretching every request N-S about its own centre (~1/cos(lat0) =
+// 1.25x). That produced seam cliffs between tile rows and disagreeing levels.
+// The checks at the end of this script guard against any regression.
 function gridUrl(xMin, zMin, res, nx, ny) {
   const w = toLon(xMin - res / 2);
   const e = toLon(xMin + (nx - 1) * res + res / 2);
@@ -69,6 +76,7 @@ function gridUrl(xMin, zMin, res, nx, ny) {
     bboxSR: '4326',
     imageSR: '4326',
     size: `${nx},${ny}`,
+    adjustAspectRatio: 'false',
     format: 'bsq',
     pixelType: 'F32',
     interpolation: 'RSP_BilinearInterpolation',
@@ -229,15 +237,106 @@ const bay = await fetchGrid('bay_120m', BAY.xMin, BAY.zMin, BAY.res, BAY.cells +
 
 // L0: fetch one 257-row strip per tile row, then slice into tiles (tiles share edges)
 const nxAll = L0.tilesX * TILE + 1;
+const nzAll = L0.tilesZ * TILE + 1;
+const strips = [];
+for (let iz = 0; iz < L0.tilesZ; iz++) {
+  strips.push(await fetchGrid(`L0_row${iz}`, L0.xMin, L0.zMin + iz * TILE * L0.res, L0.res, nxAll, TILE + 1));
+}
+
+// ---- automated checks (abort before writing anything if they fail) ----------
+const failures = [];
+const check = (ok, msg) => { console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${msg}`); if (!ok) failures.push(msg); };
+console.log('Checks:');
+
+// 1. seam continuity: the last row of strip iz and the first row of strip iz+1
+//    sample the same latitude, so they must agree (E-W seams share one strip)
+{
+  let worst = 0, sum = 0, n = 0;
+  for (let iz = 0; iz + 1 < strips.length; iz++) {
+    const a = strips[iz].data, b = strips[iz + 1].data;
+    for (let x = 0; x < nxAll; x++) {
+      const d = Math.abs(a[TILE * nxAll + x] - b[x]);
+      worst = Math.max(worst, d); sum += d; n++;
+    }
+  }
+  check(worst <= 5 && sum / n <= 0.5, `L0 N-S tile seams: max |dh| ${worst.toFixed(2)} m, mean ${(sum / n).toFixed(3)} m (limit 5 / 0.5)`);
+}
+
+// assemble the full L0 mosaic
+const l0 = new Float32Array(nxAll * nzAll);
+for (let iz = 0; iz < strips.length; iz++) l0.set(strips[iz].data, iz * TILE * nxAll);
+const l0Grid = { data: l0, nx: nxAll, ny: nzAll, res: L0.res, xMin: L0.xMin, zMin: L0.zMin };
+const bayGrid = { ...bay, res: BAY.res, xMin: BAY.xMin, zMin: BAY.zMin };
+const regionGrid = { ...region, res: REGION.res, xMin: REGION.xMin, zMin: REGION.zMin };
+// bilinear height at projected (x, z), or local mean over a box of +-r metres
+const hAt = (g, x, z) => {
+  const u = (x - g.xMin) / g.res, v = (z - g.zMin) / g.res;
+  const i = Math.max(0, Math.min(g.nx - 2, Math.floor(u))), j = Math.max(0, Math.min(g.ny - 2, Math.floor(v)));
+  const fx = u - i, fz = v - j, d = g.data, n = g.nx;
+  return (d[j * n + i] * (1 - fx) + d[j * n + i + 1] * fx) * (1 - fz) + (d[(j + 1) * n + i] * (1 - fx) + d[(j + 1) * n + i + 1] * fx) * fz;
+};
+const hMean = (g, x, z, r) => {
+  let s = 0, n = 0;
+  for (let dz = -r; dz <= r; dz += r / 4) for (let dx = -r; dx <= r; dx += r / 4) { s += hAt(g, x + dx, z + dz); n++; }
+  return s / n;
+};
+
+// 2. level agreement on a 40x40 lattice: each coarse level against the L0
+//    mosaic averaged over the coarse cell (so resolution alone doesn't count)
+{
+  const stat = (arr) => { arr.sort((a, b) => a - b); return { med: arr[arr.length >> 1], p90: arr[Math.floor(arr.length * 0.9)] }; };
+  const dBay = [], dReg = [];
+  for (let j = 1; j < 40; j++) for (let i = 1; i < 40; i++) {
+    const x = L0.xMin + (i / 40) * L0.size, z = L0.zMin + (j / 40) * L0.size;
+    dBay.push(Math.abs(hAt(bayGrid, x, z) - hMean(l0Grid, x, z, 60)));
+    dReg.push(Math.abs(hAt(regionGrid, x, z) - hMean(l0Grid, x, z, 250)));
+  }
+  const sb = stat(dBay), sr = stat(dReg);
+  check(sb.med <= 5 && sb.p90 <= 30, `120 m vs 30 m: median |dh| ${sb.med.toFixed(1)} m, p90 ${sb.p90.toFixed(1)} m (limit 5 / 30)`);
+  check(sr.med <= 15 && sr.p90 <= 120, `500 m vs 30 m: median |dh| ${sr.med.toFixed(1)} m, p90 ${sr.p90.toFixed(1)} m (limit 15 / 120)`);
+}
+
+// 3. coastline control points: known land / shallow-water spots must come out
+//    on the right side of the waterline at 30 m (and 120 m where it's coarse enough)
+{
+  const P = [
+    // name, lat, lon, [min, max] metres at 30 m, check the 120 m level too
+    ['Santa Cruz wharf, end (water)', 36.9563, -122.0171, [-25, 0], false],
+    ['Santa Cruz Boardwalk (land)', 36.9640, -122.0180, [0, 60], false],
+    ['Moss Landing harbour mouth (water)', 36.8043, -121.7894, [-60, 0], false],
+    ['Moss Landing power plant (land)', 36.8050, -121.7810, [0, 40], false],
+    ['Monterey Municipal Wharf 2, end (water)', 36.6053, -121.8898, [-25, 0], false],
+    ['Point Pinos lighthouse (land)', 36.6335, -121.9335, [0, 60], true],
+    ['Monterey Canyon head, 1.5 km off Moss Landing (deep)', 36.8025, -121.8080, [-250, -80], true],
+    ['Santa Cruz shelf 36.90N 122.05W (shelf)', 36.9000, -122.0500, [-70, -20], true],
+  ];
+  for (const [name, lat, lon, [lo, hi], coarse] of P) {
+    const x = (lon - LON0) * M_PER_DEG_LON, z = -(lat - LAT0) * M_PER_DEG_LAT;
+    const h = hAt(l0Grid, x, z);
+    let ok = h >= lo && h <= hi;
+    let msg = `${name}: ${h.toFixed(1)} m at 30 m`;
+    if (coarse) {
+      const hb = hAt(bayGrid, x, z);
+      ok = ok && Math.sign(hb) === Math.sign(h);
+      msg += `, ${hb.toFixed(1)} m at 120 m`;
+    }
+    check(ok, `${msg} (expect ${lo}..${hi})`);
+  }
+}
+if (failures.length && !process.argv.includes('--force')) {
+  console.error(`\n${failures.length} check(s) failed; nothing written (pass --force to write anyway).`);
+  process.exit(1);
+}
+
+// ---- write -------------------------------------------------------------------
 const tileBytes = [];
 let l0Min = Infinity, l0Max = -Infinity;
 for (let iz = 0; iz < L0.tilesZ; iz++) {
-  const strip = await fetchGrid(`L0_row${iz}`, L0.xMin, L0.zMin + iz * TILE * L0.res, L0.res, nxAll, TILE + 1);
   for (let ix = 0; ix < L0.tilesX; ix++) {
     const t = new Float32Array((TILE + 1) * (TILE + 1));
     for (let z = 0; z <= TILE; z++) {
       for (let x = 0; x <= TILE; x++) {
-        const v = strip.data[z * nxAll + ix * TILE + x];
+        const v = l0[(iz * TILE + z) * nxAll + ix * TILE + x];
         t[z * (TILE + 1) + x] = v;
         if (v < l0Min) l0Min = v;
         if (v > l0Max) l0Max = v;

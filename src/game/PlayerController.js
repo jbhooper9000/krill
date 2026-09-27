@@ -151,6 +151,14 @@ export class PlayerController {
       this._camPos.lerp(_desiredCam, damp(14, dt));
       this._camLook.lerp(_desiredLook, damp(18, dt));
     }
+    // NaN guard: one bad frame (e.g. a scripted teleport) must not poison the camera forever
+    if (!Number.isFinite(this._camPos.x + this._camPos.y + this._camPos.z)
+      || !Number.isFinite(this._camLook.x + this._camLook.y + this._camLook.z)) {
+      const ok = Number.isFinite(_desiredCam.x + _desiredCam.y + _desiredCam.z);
+      this._camPos.copy(ok ? _desiredCam : this.position);
+      if (!ok) this._camPos.z += L * 2;
+      this._camLook.copy(this.position);
+    }
     this.camera.position.copy(this._camPos);
     if (this.shake > 0.001) {
       const a = this.shake * this.shake * L * 0.025;
@@ -178,7 +186,6 @@ export class PlayerController {
 
     // ---- lunge charging / release ----
     let lungeActive = false;
-    const wasLunging = this.lungeTimer > 0;
     if (this._filter > 0) this._filter = Math.max(0, this._filter - dt);
     if (input.lunge && this._filter <= 0 && !this.forceClimb && this.mode === 'swim') {
       if (!this._wasCharging) this.lungeCharge = 0;
@@ -195,9 +202,11 @@ export class PlayerController {
     if (this.lungeTimer > 0) {
       this.lungeTimer -= dt;
       lungeActive = true;
-    } else if (wasLunging) {
-      this._filter = this.sp.filterTime;
-      if (this._filter > 0) this._emit('filter', { time: this._filter });
+      if (this.lungeTimer <= 0) {
+        // mouth closes: rorquals now filter the engulfed water
+        this._filter = this.sp.filterTime;
+        if (this._filter > 0) this._emit('filter', { time: this._filter });
+      }
     }
 
     if (this.mode === 'air') {
@@ -262,9 +271,13 @@ export class PlayerController {
     }
     this.thrust += (targetThrust - this.thrust) * damp(targetThrust > this.thrust ? 3 : 1.5, dt);
 
-    if (targetSpeed > this.speed) {
+    if (this._runup) {
+      // breach run-up: real fluke-stroke acceleration (m/s^2), so exit speed
+      // depends on how deep you start and how fast you were already going
+      this.speed = Math.min(targetSpeed, this.speed + sp.breachAccel * dt);
+    } else if (targetSpeed > this.speed) {
       // accelerate — heavier animals build speed more slowly
-      const accel = (this._runup ? 1.8 : lungeActive ? 2.4 : 0.9) * (14 / sp.length);
+      const accel = (lungeActive ? 2.4 : 0.9) * (14 / sp.length);
       this.speed += (targetSpeed - this.speed) * damp(accel, dt);
     } else {
       // coast: hydrodynamic drag, faster bleed-off when well over target

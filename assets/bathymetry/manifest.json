@@ -1,7 +1,7 @@
 {
   "name": "Monterey Bay",
   "version": 1,
-  "generated": "2026-09-26",
+  "generated": "2026-09-27",
   "generator": "tools/bathymetry/build.mjs",
   "source": {
     "name": "NOAA NCEI DEM Global Mosaic (ArcGIS ImageServer exportImage)",
@@ -44,7 +44,7 @@
         "south": 36.439195
       },
       "minHeight": -3086.9,
-      "maxHeight": 976.9
+      "maxHeight": 962.6
     },
     "bay": {
       "res": 120,
@@ -59,8 +59,8 @@
         "north": 37.060805,
         "south": 36.439195
       },
-      "min": -3086.6,
-      "max": 1333.9
+      "min": -3086.4,
+      "max": 947.3
     },
     "region": {
       "res": 500,
@@ -75,8 +75,8 @@
         "north": 37.90113,
         "south": 35.59887
       },
-      "min": -4071.2,
-      "max": 1682.7
+      "min": -3893.8,
+      "max": 1708.9
     }
   },
   "maps": {

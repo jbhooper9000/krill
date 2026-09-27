@@ -9,6 +9,7 @@ export const SPECIES = {
     breachKrill: 150,
     breachClimb: 1.31, // 75 deg
     vExitMax: 9.5,
+    breachAccel: 1.6, // m/s^2 during the run-up
     twistDefault: 2.44, // 140 deg
     twistMax: 3.49, // 200 deg
     name: 'Humpback',
@@ -41,6 +42,7 @@ export const SPECIES = {
     breachKrill: 260,
     breachClimb: 1.05, // 60 deg
     vExitMax: 7.0,
+    breachAccel: 0.9, // m/s^2 during the run-up
     twistDefault: 0.7, // 40 deg
     twistMax: 1.22, // 70 deg
     name: 'Blue',
@@ -67,6 +69,7 @@ export const SPECIES = {
     breachKrill: 200, // design doc: 4 squid once squid exist
     breachClimb: 1.4, // 80 deg
     vExitMax: 9.0,
+    breachAccel: 1.5, // m/s^2 during the run-up
     twistDefault: 1.57, // 90 deg
     twistMax: 2.27, // 130 deg
     name: 'Sperm',

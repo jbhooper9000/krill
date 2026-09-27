@@ -132,7 +132,7 @@ const scenarios = {
     await sleep(300);
     await shot('hud-1b-lunge-burst');
     // dark water near the floor, diving
-    await evaljs(`(() => { const c = krill.controller; c.position.y = c.bounds.minY + 6; c._aimPitchTarget = -0.5; return 1; })()`);
+    await evaljs(`(() => { const c = krill.controller; c.position.y = c.bounds.floorAt(c.position.x, c.position.z) + c.sp.length * 0.4 + 6; c._aimPitchTarget = -0.5; return 1; })()`);
     await sleep(1500);
     console.log('dark', JSON.stringify(await hudState()));
     await shot('hud-2-dark');
@@ -299,6 +299,8 @@ const scenarios = {
   // floating-origin round trip, heightAt sanity vs the chart, and perf counters.
   async terrain() {
     await evaljs(`krill.terrain.ready.then(() => 1)`);
+    // software rendering runs at ~2 fps: give chunk building a bigger per-frame budget
+    await evaljs(`krill.terrain.options.buildBudgetMs = 40; 1`);
     await sleep(1500);
     const info = (label) => evaljs(`(() => { const t = krill.terrain, c = krill.controller, p = c.position;
       const r = t.regionAt(p.x, p.z); const ll = t.unproject(p.x + t.origin.x, p.z + t.origin.y);
@@ -312,14 +314,21 @@ const scenarios = {
       c.position.set(x, Math.min(-4, t.heightAt(x, z) + ${above}), z); c.velocity.set(0, 0, 0); c.speed = 0;
       c.yaw = c.aimYaw = c._aimYawTarget = ${yaw}; c.pitch = 0; c._updateCamera(0, true); return 1; })()`);
     // clear-water debug view: freeze depth fog so macro shape is visible
-    const clearWater = (density, far, near = 0.1) => evaljs(`(() => { krill.world.setDepth = () => ({}); krill.scene.fog.density = ${density};
+    // (the water model ignores fog density: scale its beam extinction and light
+    // attenuation down by `k` and raise the light floor instead)
+    const clearWater = (density, far, near = 0.1) => evaljs(`(() => { const w = krill.world; w.setDepth = () => ({}); krill.scene.fog.density = ${density};
+      const k = ${density} === 0 ? 0.004 : Math.min(1, ${density} / 0.016) * 0.35;
+      if (!w._opticsBackup) w._opticsBackup = JSON.parse(JSON.stringify(w.optics));
+      const b = w._opticsBackup; w.optics.ext = b.ext.map((v) => v * k); w.optics.kd = b.kd.map((v) => v * Math.max(k, 0.05));
+      w.optics.floor = Math.max(b.floor, 0.35); w._extScale = 1; w._writeOptics();
       krill.camera.far = ${far}; krill.camera.near = ${near}; krill.camera.updateProjectionMatrix(); return 1; })()`);
 
     console.log('sanity', JSON.stringify(await evaljs(`(() => { const t = krill.terrain; const pts = {
-      'Monterey Canyon axis 36.78N 122.025W': [36.78, -122.025], 'canyon axis 36.69N 122.10W': [36.69, -122.10],
-      'upper canyon 36.795N 121.86W': [36.795, -121.86], 'southern shelf 36.70N 121.88W': [36.70, -121.88],
-      'Santa Cruz shelf 36.90N 122.05W': [36.90, -122.05], 'Soquel Canyon 36.82N 121.97W': [36.82, -121.97],
-      'MARS 36.713N 122.187W': [36.7128, -122.1868] };
+      'canyon head 36.8025N 121.808W': [36.8025, -121.808], 'Monterey Canyon axis 36.7806N 121.955W': [36.7806, -121.9549],
+      'canyon axis 36.6939N 122.054W': [36.6939, -122.0537], 'southern shelf 36.70N 121.88W': [36.70, -121.88],
+      'Santa Cruz shelf 36.90N 122.05W': [36.90, -122.05], 'Soquel Canyon 36.826N 121.977W': [36.8259, -121.9767],
+      'Carmel Canyon 36.547N 122.006W': [36.5466, -122.0061], 'MARS 36.713N 122.187W (891 m)': [36.7128, -122.1868],
+      'Santa Cruz wharf end': [36.9563, -122.0171], 'Point Pinos lighthouse': [36.6335, -121.9335] };
       const o = {}; for (const [k, [la, lo]] of Object.entries(pts)) { const [X, Z] = t.project(la, lo);
         const x = X - t.origin.x, z = Z - t.origin.y; const r = t.regionAt(x, z); o[k] = [+t.heightAt(x, z).toFixed(0), r && r.name]; }
       return o; })()`)));
@@ -338,6 +347,35 @@ const scenarios = {
     // 0. as the game currently lights it (depth fog + dim light are the lighting pass's job)
     await key('keyDown', 'KeyW', 'w'); await sleep(2000); await key('keyUp', 'KeyW', 'w');
     await shot('terrain-0-start-as-lit');
+
+    // floor detail in normal play lighting (no debug fog): shelf, reef, kelp
+    const floraInfo = () => evaljs(`JSON.stringify(krill.terrain.stats.flora)`);
+    await teleport(36.70, -121.88, 9, 0.6);
+    await evaljs(`(() => { const c = krill.controller; c._aimPitchTarget = -0.35; return 1; })()`);
+    await sleep(6000);
+    console.log(JSON.stringify(await info('floor-shelf-76m')), await floraInfo());
+    await shot('terrain-f1-shelf-76m');
+    await teleport(36.925, -122.04, 7, 2.2);
+    await evaljs(`(() => { const c = krill.controller; c._aimPitchTarget = -0.3; return 1; })()`);
+    await sleep(6000);
+    console.log(JSON.stringify(await info('floor-santa-cruz-shelf')), await floraInfo());
+    await shot('terrain-f2-santa-cruz-shelf');
+    await teleport(36.6395, -121.9395, 7, 1.2);
+    await evaljs(`(() => { const c = krill.controller; c._aimPitchTarget = -0.3; return 1; })()`);
+    await sleep(6000);
+    console.log(JSON.stringify(await info('floor-point-pinos-reef')), await floraInfo());
+    await shot('terrain-f3-point-pinos-reef');
+    await teleport(36.6185, -121.8985, 1000, 2.6);
+    await evaljs(`(() => { const c = krill.controller; c.position.y = -5; c._aimPitchTarget = -0.15; return 1; })()`);
+    await sleep(7000);
+    console.log(JSON.stringify(await info('kelp-cannery-row')), await floraInfo());
+    await shot('terrain-f4-kelp-cannery-row');
+    console.log('perf in kelp', JSON.stringify({ ...(await frameInfo()), fps: await fps(), stats: await evaljs(`krill.terrain.stats`) }));
+    await teleport(36.5195, -121.9600, 1000, -Math.PI / 2);
+    await evaljs(`(() => { const c = krill.controller; c.position.y = -9; c._aimPitchTarget = 0.1; return 1; })()`);
+    await sleep(7000);
+    console.log(JSON.stringify(await info('kelp-point-lobos')), await floraInfo());
+    await shot('terrain-f5-kelp-point-lobos');
 
     // 1. behind the whale on the canyon's upper wall (light held at a 30 m zone, fog thinned)
     await evaljs(`krill.world.setDepth(30); 1`);
@@ -410,6 +448,44 @@ const scenarios = {
       if (name) await shot(name);
     }
   },
+  // Time of day (World.setTimeOfDay): underwater follow cam, looking up, and
+  // above the surface, at dawn / morning / noon / golden hour / dusk / night.
+  async daynight() {
+    await hideHud();
+    await evaljs(`krill.controller.position.y = -12; 1`);
+    const setT = (h) => evaljs(`(() => { if (krill.clock) krill.clock.hours = ${h}; krill.world.setTimeOfDay(${h}); krill.effects.resetExposure && krill.effects.resetExposure(); return krill.world.lightLevel.toFixed(4); })()`);
+    // cameras relative to the whale: safe with the floating origin
+    const view = (kind) => evaljs(`(() => { const c = krill.controller; const L = c.sp.length; c._updateCamera = function(){ const p = this.position;
+      if ('${kind}' === 'under') { this.camera.position.set(p.x + L*0.9, p.y + L*0.2, p.z + L*1.3); this.camera.lookAt(p.x, p.y, p.z); }
+      else if ('${kind}' === 'up') { this.camera.position.set(p.x + L*0.8, p.y - L*0.6, p.z + L*0.8); this.camera.lookAt(p.x, p.y + L*3, p.z); }
+      else { this.camera.position.set(p.x + L*0.9, 3, p.z + L*1.6); this.camera.lookAt(p.x, 1.2, p.z - L*3); } }; return 1; })()`);
+    for (const [h, tag] of [[6.1, 'dawn'], [9, 'morning'], [13, 'noon'], [19.2, 'golden'], [20.3, 'dusk'], [23.5, 'night']]) {
+      console.log('time', tag, await setT(h));
+      for (const kind of ['under', 'up', 'above']) {
+        await view(kind);
+        await evaljs(`krill.effects.resetExposure && krill.effects.resetExposure(); 1`);
+        await sleep(900);
+        await shot(`tod-${tag}-${kind}`);
+      }
+    }
+  },
+  // Sea state from above: calm / moderate / strong wind (World.setWind).
+  async sea() {
+    await hideHud();
+    await evaljs(`krill.controller.position.y = -12; if (krill.clock) krill.clock.hours = 16; krill.world.setTimeOfDay(16); 1`);
+    await evaljs(`(() => { const c = krill.controller; const L = c.sp.length; c._updateCamera = function(){ const p = this.position;
+      this.camera.position.set(p.x, 6, p.z + L); this.camera.lookAt(p.x - 40, 0, p.z - 120); }; return 1; })()`);
+    for (const kts of [4, 14, 26]) {
+      await evaljs(`krill.world.setWind(${kts}, 300); 1`);
+      await sleep(900);
+      await shot(`sea-${kts}kts`);
+    }
+    // looking into the sun: glitter path
+    await evaljs(`(() => { const s = krill.world.sunDirection; const c = krill.controller; c._updateCamera = function(){ const p = this.position;
+      this.camera.position.set(p.x, 5, p.z); this.camera.lookAt(p.x + s.x * 100, -25, p.z + s.z * 100); }; krill.world.setWind(14, 300); return 1; })()`);
+    await sleep(900);
+    await shot('sea-glitter');
+  },
   // Camera above the water (breach views): pinned at an absolute height.
   async above() {
     await hideHud();
@@ -451,6 +527,13 @@ try {
   const query = noAutostart.has(scenario) ? `?test&species=${species}` : `?autostart=${species}`;
   await send('Page.navigate', { url: `http://localhost:${port}/${query}` });
   await sleep(4000);
+  // Game.start awaits the bathymetry; give it up to 20 s more before driving it
+  if (!noAutostart.has(scenario)) {
+    for (let t = 0; t < 40; t++) {
+      if (await evaljs('!!(window.krill && krill.running && krill.controller)').catch(() => false)) break;
+      await sleep(500);
+    }
+  }
   if (!scenarios[scenario]) throw new Error(`unknown scenario ${scenario}`);
   await scenarios[scenario]();
   console.log('fps (software render)', await fps());

@@ -9,6 +9,7 @@ import {
   WATER_GLSL,
   SURFACE_GLSL,
   IOR_WATER,
+  SLOT_LIGHT,
   waterData,
   waterUniform,
   waterSlots,
@@ -19,33 +20,95 @@ import {
 const SURFACE_Y = 0;
 const _tmpColor = new THREE.Color();
 const FLOOR_Y = -84;
+const D2R = Math.PI / 180;
 
 // ---------------------------------------------------------------------------
-// Optical constants (per RGB channel, 1/m). Real clear-ocean values are
-// roughly c = (0.35, 0.06, 0.03), Kd = (0.4, 0.07, 0.03); the game compresses
-// ~1000 m of water column into 84 units, so Kd is a little stronger in green/
-// blue (deep zones go dark) and c a little weaker (whales stay readable at the
-// 25–40 m camera distance).
+// Water optics presets (per RGB channel, 1/m). `ext` = beam extinction for the
+// view ray, `kd` = diffuse attenuation of downwelling light, `w0` = horizontal
+// water radiance just below the surface at a clear noon. `layer` adds a
+// plankton layer (extra dExt / dKd) that is fully on above `top` and fades out
+// by `bottom` (world y, metres).
+//
+// monterey   : summer upwelling / feeding season. Chlorophyll + CDOM absorb
+//              blue, so the layer transmits green; heavy particulate
+//              scattering gives the milky green-grey, short-visibility water
+//              with bright forward-scatter haze. Below ~35 m (and offshore) the
+//              water clears and turns blue. Visibility (contrast ~2%) in the
+//              layer ~40 m green; a whale at 25 m reads as a soft silhouette.
+// open-ocean : clear oligotrophic blue water (the previous look).
 // ---------------------------------------------------------------------------
+export const WATER_PRESETS = {
+  monterey: {
+    ext: [0.3, 0.044, 0.042],
+    kd: [0.32, 0.06, 0.042],
+    layer: { dExt: [0.1, 0.027, 0.048], dKd: [0.14, 0.045, 0.075], top: -8, bottom: -36 },
+    w0: [0.07, 0.135, 0.13],
+    forward: 0.7,
+  },
+  'open-ocean': {
+    ext: [0.2, 0.04, 0.03],
+    kd: [0.3, 0.068, 0.042],
+    layer: { dExt: [0, 0, 0], dKd: [0, 0, 0], top: -8, bottom: -36 },
+    w0: [0.012, 0.115, 0.17],
+    forward: 0.4,
+  },
+};
+
 const OPTICS = {
-  ext: [0.2, 0.04, 0.03], // beam extinction along the view ray
-  kd: [0.3, 0.068, 0.042], // diffuse attenuation of downwelling light
-  w0: [0.012, 0.115, 0.17], // horizontal water radiance just below the surface
-  forward: 0.4, // sun forward-scatter glow in the water
   floor: 0.045, // minimum light at depth (game readability)
   caustics: 0.95,
   causticScale: 0.6, // caustic cells per metre
-  sunColor: [1.0, 0.96, 0.9],
-  zenith: [0.035, 0.15, 0.62],
-  horizon: [0.36, 0.55, 0.84],
-  waves: 1.0,
-  sunDisc: 70,
+  disc: 30, // key-light disc radiance / irradiance
+  sunIrradiance: 2.9, // clear-noon sun (DirectionalLight intensity)
+  moonIrradiance: 0.05, // full moon, exaggerated for play (real ~2e-6 of the sun)
 };
 
-// Sun in air: elevation 58 deg, in front-left of the default camera heading (-Z)
-// so light shafts converge in view when swimming.
-const SUN_ELEV = (58 * Math.PI) / 180;
-const SUN_AZ = new THREE.Vector2(-0.45, -0.89).normalize();
+// Monterey (36.8 N) in the summer feeding season (declination ~ +18 deg).
+// Clock hours are local (PDT); solar noon at 121.9 W is ~13:05, which also
+// matches Clock.daylight's dawn/dusk ramps.
+const LAT = 36.8 * D2R;
+const DECL = 18 * D2R;
+const SOLAR_NOON = 13;
+
+function celestialDir(hours, decl, out) {
+  const H = (hours - SOLAR_NOON) * 15 * D2R;
+  const E = -Math.cos(decl) * Math.sin(H);
+  const N = Math.sin(decl) * Math.cos(LAT) - Math.cos(decl) * Math.sin(LAT) * Math.cos(H);
+  const U = Math.sin(LAT) * Math.sin(decl) + Math.cos(LAT) * Math.cos(decl) * Math.cos(H);
+  return out.set(E, U, -N).normalize(); // world: x east, y up, z south
+}
+
+function refractIntoWater(air, out) {
+  const h = Math.hypot(air.x, air.z);
+  const sinA = Math.min(1, h); // sin of zenith angle in air (|air| = 1)
+  const sinW = sinA / IOR_WATER;
+  const cosW = Math.sqrt(1 - sinW * sinW);
+  const k = h > 1e-6 ? sinW / h : 0;
+  return out.set(air.x * k, cosW, air.z * k).normalize();
+}
+
+// Sky keyframes by sin(sun elevation): radiance (linear, same scale as the
+// clear-noon sun irradiance of ~2.9).
+const SKY_KEYS = [
+  { s: -0.3, zen: [0.0004, 0.0006, 0.0015], hor: [0.0008, 0.001, 0.0017], glow: [0, 0, 0], cloud: [0.0008, 0.0009, 0.0013], haze: [0.001, 0.0011, 0.0015] },
+  { s: -0.15, zen: [0.0008, 0.0016, 0.0045], hor: [0.003, 0.0032, 0.005], glow: [0.004, 0.0016, 0.0008], cloud: [0.002, 0.002, 0.0026], haze: [0.003, 0.003, 0.004] },
+  { s: -0.05, zen: [0.0025, 0.005, 0.015], hor: [0.03, 0.022, 0.024], glow: [0.08, 0.03, 0.012], cloud: [0.035, 0.018, 0.016], haze: [0.025, 0.02, 0.022] },
+  { s: 0.05, zen: [0.012, 0.03, 0.1], hor: [0.2, 0.16, 0.14], glow: [0.35, 0.17, 0.06], cloud: [0.4, 0.24, 0.16], haze: [0.2, 0.16, 0.15] },
+  { s: 0.25, zen: [0.035, 0.13, 0.5], hor: [0.34, 0.48, 0.7], glow: [0.06, 0.03, 0.015], cloud: [0.95, 0.9, 0.86], haze: [0.58, 0.61, 0.66] },
+  { s: 1.0, zen: [0.035, 0.15, 0.62], hor: [0.36, 0.55, 0.84], glow: [0, 0, 0], cloud: [1.05, 1.05, 1.05], haze: [0.62, 0.67, 0.74] },
+];
+const _sky = { zen: [0, 0, 0], hor: [0, 0, 0], glow: [0, 0, 0], cloud: [0, 0, 0], haze: [0, 0, 0] };
+function skyAt(s) {
+  let i = 0;
+  while (i < SKY_KEYS.length - 2 && s > SKY_KEYS[i + 1].s) i++;
+  const a = SKY_KEYS[i], b = SKY_KEYS[i + 1];
+  const t = THREE.MathUtils.clamp((s - a.s) / (b.s - a.s), 0, 1);
+  for (const k of ['zen', 'hor', 'glow', 'cloud', 'haze']) {
+    for (let c = 0; c < 3; c++) _sky[k][c] = a[k][c] + (b[k][c] - a[k][c]) * t;
+  }
+  return _sky;
+}
+const smooth = THREE.MathUtils.smoothstep;
 
 // ---------------------------------------------------------------------------
 // Surface + dome shaders
@@ -59,8 +122,9 @@ const commonVert = /* glsl */ `
   }
 `;
 
-// The surface mesh: opaque Snell's window / TIR from below, Fresnel-weighted
-// sky reflection composited (premultiplied) over the water from above.
+// The surface mesh: opaque Snell's window / TIR from below; from above the
+// premultiplied reflection + foam with 'block' in alpha, blended as
+//   out = src + (1 - block) * underwater   (ONE, ONE_MINUS_SRC_ALPHA).
 const surfaceFrag = /* glsl */ `
   ${WATER_GLSL}
   ${SURFACE_GLSL}
@@ -76,14 +140,12 @@ const surfaceFrag = /* glsl */ `
       col = kwSurfaceBelow( vWorld, v, dist );
       col = kwWater( col, ro, vWorld );
     } else {
-      float F;
-      col = kwSurfaceAbove( vWorld, v, dist, F );
-      // grazing / distant: fade toward the analytic dome (horizon haze)
-      float haze = 1.0 - exp( - dist / 700.0 );
-      F = mix( F, 1.0, haze );
-      col = mix( col, KW_HORIZ, haze * 0.6 );
-      col *= F;
-      alpha = F;
+      float block;
+      col = kwSurfaceAbove( vWorld, v, dist, block );
+      // aerial perspective toward the horizon
+      float haze = 1.0 - exp( - dist / 1800.0 );
+      col = mix( col, kwSky( normalize( vec3( v.x, 0.002, v.z ) ) ), haze );
+      alpha = mix( block, 1.0, haze );
     }
     gl_FragColor = vec4( max( col, 0.0 ), alpha );
   }
@@ -125,12 +187,12 @@ const domeFrag = /* glsl */ `
         float viewZ = - ( viewMatrix * vec4( hit, 1.0 ) ).z;
         float nearZ = projectionMatrix[ 3 ][ 2 ] / ( projectionMatrix[ 2 ][ 2 ] - 1.0 );
         if ( viewZ < nearZ || t > 280.0 ) {
-          float F;
-          vec3 R = kwSurfaceAbove( hit, v, t, F );
-          float haze = 1.0 - exp( - t / 700.0 );
-          F = mix( F, 1.0, haze );
-          R = mix( R, KW_HORIZ, haze * 0.6 );
-          col = mix( col, R, F );
+          float block;
+          vec3 R = kwSurfaceAbove( hit, v, t, block );
+          float haze = 1.0 - exp( - t / 1800.0 );
+          R = mix( R, kwSky( normalize( vec3( v.x, 0.002, v.z ) ) ), haze );
+          block = mix( block, 1.0, haze );
+          col = R + ( 1.0 - block ) * col;
         }
       }
     }
@@ -158,7 +220,7 @@ const snowVert = /* glsl */ `
     vAlpha = min( 1.0, size * size ) * ( clamped / max( size, 1e-3 ) ) * ( 0.35 + 0.65 * h );
     vec3 T;
     kwWaterT( vec3( 0.0 ), cameraPosition, wp.xyz, T );
-    vLight = kwAmbientTransmit( wp.xyz ) * T;
+    vLight = kwAmbientTransmit( wp.xyz ) * T * KW_LIGHT;
   }
 `;
 const snowFrag = /* glsl */ `
@@ -186,29 +248,30 @@ export class World {
     // --- public, read-only-ish state for other systems ---
     /** true when the camera is below the water surface (updated in update()) */
     this.isCameraUnderwater = true;
-    /** unit vector pointing TOWARD the sun, in air */
-    this.sunDirection = new THREE.Vector3(
-      Math.cos(SUN_ELEV) * SUN_AZ.x,
-      Math.sin(SUN_ELEV),
-      Math.cos(SUN_ELEV) * SUN_AZ.y
-    ).normalize();
-    /** unit vector pointing toward the sun as seen from under water (refracted) */
-    this.sunDirectionWater = new THREE.Vector3();
-    {
-      const sinA = Math.cos(SUN_ELEV); // sin of zenith angle in air
-      const sinW = sinA / IOR_WATER;
-      const cosW = Math.sqrt(1 - sinW * sinW);
-      this.sunDirectionWater.set(SUN_AZ.x * sinW, cosW, SUN_AZ.y * sinW).normalize();
-    }
+    /** unit vector pointing TOWARD the sun, in air (may point below the horizon at night) */
+    this.sunDirection = new THREE.Vector3(0, 1, 0);
+    /** unit vector toward the sun as seen from under water (refracted) */
+    this.sunDirectionWater = new THREE.Vector3(0, 1, 0);
+    /** unit vector toward the moon (full moon, opposite the sun) */
+    this.moonDirection = new THREE.Vector3(0, -1, 0);
+    /** current key light (sun by day, moon by night), in air and refracted */
+    this.keyDirection = new THREE.Vector3(0, 1, 0);
+    this.keyDirectionWater = new THREE.Vector3(0, 1, 0);
+    /** surface light level relative to a clear noon (0.002 at night .. 1) */
+    this.lightLevel = 1;
+    /** 0 at night .. 1 in full daylight (from the sun elevation) */
+    this.daylight = 1;
     /** the shared water parameter block (see WaterMedium.js) */
     this.waterData = waterData;
     this.optics = { ...OPTICS };
-    this._extScale = 1;
+    this.hours = 9;
+    this.wind = { kts: 12, dirDeg: 300 };
+    this.swell = { height: 1.8, period: 10, dirDeg: 305 };
+    this.sky = { cloudCover: 0.3, marineLayer: 0.55 };
 
-    this._writeOptics();
     this._noise = makeTileableNoiseTexture(256, 8, 4, 5);
     this._buildLights();
-    this._buildEnvironment();
+    this.setWaterPreset(options.water || 'monterey');
     this._buildSurface();
     this._buildFloor();
     this._buildRocks();
@@ -227,6 +290,10 @@ export class World {
     // density are NOT used by the water model (see WaterMedium.js), but colour is
     // kept roughly in sync for any code that reads it.
     scene.fog = new THREE.FogExp2(this._fogColor.getHex(), 0.016);
+
+    this.setWind(this.wind.kts, this.wind.dirDeg);
+    this.setSwell(this.swell.height, this.swell.period, this.swell.dirDeg);
+    this.setTimeOfDay(this.hours);
   }
 
   /**
@@ -239,50 +306,175 @@ export class World {
     return makeWaterAware(material, opts);
   }
 
-  _writeOptics() {
-    const o = this.optics;
+  // ---- water optics --------------------------------------------------------
+  /** Switch the water body: 'monterey' (default, green plankton layer) or 'open-ocean'. */
+  setWaterPreset(name) {
+    const p = WATER_PRESETS[name] || WATER_PRESETS.monterey;
+    this.waterPreset = WATER_PRESETS[name] ? name : 'monterey';
+    this._preset = p;
     const { set3, setW } = waterSlots;
-    const e = this._extScale;
-    set3(0, o.ext[0] * e, o.ext[1] * e, o.ext[2] * e);
-    set3(1, ...o.w0);
+    set3(0, ...p.ext);
     setW(1, this.waterLevel);
-    set3(2, ...o.kd);
-    setW(2, o.caustics);
-    set3(3, this.sunDirectionWater.x, this.sunDirectionWater.y, this.sunDirectionWater.z);
-    setW(3, o.forward);
-    set3(4, this.sunDirection.x, this.sunDirection.y, this.sunDirection.z);
-    setW(4, o.floor);
-    set3(5, ...o.sunColor);
-    setW(5, o.causticScale);
-    set3(6, ...o.zenith);
-    setW(6, o.waves);
-    set3(7, ...o.horizon);
-    setW(7, o.sunDisc);
-  }
-
-  // ---- lights ------------------------------------------------------------
-  // Intensities are SURFACE values: the water shader attenuates them with the
-  // depth of every shaded point (and projects caustics onto the sun term).
-  _buildLights() {
-    this.hemi = new THREE.HemisphereLight(0x9fd8ff, 0x0a2230, 0.12);
-    this.scene.add(this.hemi);
-
-    this.sun = new THREE.DirectionalLight(0xfff3e4, 2.7);
-    this.sun.position.copy(this.sunDirectionWater).multiplyScalar(100);
-    this.scene.add(this.sun);
-    this.scene.add(this.sun.target);
-  }
-
-  // Image-based ambient light: the underwater radiance distribution.
-  _buildEnvironment() {
-    const w0 = this.optics.w0;
+    set3(2, ...p.kd);
+    setW(4, this.optics.floor);
+    setW(5, this.optics.causticScale);
+    set3(8, ...p.layer.dExt);
+    setW(8, this.waterLevel + p.layer.top);
+    set3(9, ...p.layer.dKd);
+    setW(9, this.waterLevel + p.layer.bottom);
+    // image-based ambient: the underwater radiance distribution for this water
+    if (this.envMap) this.envMap.dispose();
+    const w0 = p.w0;
     this.envMap = makeUnderwaterEnvCube({
       window: [1.05, 1.3, 1.45],
       horizon: [w0[0] * 1.3, w0[1] * 1.3, w0[2] * 1.3],
       deep: [w0[0] * 0.2, w0[1] * 0.25, w0[2] * 0.3],
     });
     this.scene.environment = this.envMap;
-    this.scene.environmentIntensity = 1.0;
+    if (this.hours !== undefined && this.sun) this.setTimeOfDay(this.hours);
+  }
+
+  // ---- time of day -------------------------------------------------------
+  /**
+   * Set local time (hours 0..24, PDT). Moves the sun along a Monterey summer
+   * path (and a full moon opposite it), sets the key light, sky colours, water
+   * light level, caustics / shaft strength and star visibility. Cheap (no
+   * allocation); safe to call every frame.
+   */
+  setTimeOfDay(hours) {
+    if (!Number.isFinite(hours)) return;
+    this.hours = ((hours % 24) + 24) % 24;
+    const o = this.optics;
+    const { set3, setW } = waterSlots;
+    celestialDir(this.hours, DECL, this.sunDirection);
+    celestialDir(this.hours + 12, -DECL, this.moonDirection);
+    refractIntoWater(this.sunDirection, this.sunDirectionWater);
+    const sSun = this.sunDirection.y;
+    const sMoon = this.moonDirection.y;
+    const cover = this.sky.cloudCover;
+    const cloudDim = 1 - 0.6 * cover * cover;
+
+    // key light: the sun until it is a little below the horizon, then the moon
+    const sunUp = smooth(sSun, -0.02, 0.2);
+    const moonUp = smooth(sMoon, -0.02, 0.2) * (1 - smooth(sSun, -0.12, 0.0));
+    const useSun = sSun > -0.04;
+    const warm = 1 - smooth(sSun, 0.03, 0.4);
+    let kr, kg, kb, kI;
+    if (useSun) {
+      kr = 1.0; kg = 0.96 - 0.44 * warm; kb = 0.9 - 0.65 * warm;
+      // air mass: a low sun is dimmer (and redder, above)
+      const airMass = Math.exp(-0.1 * (1 / Math.max(sSun, 0.05) - 1));
+      kI = o.sunIrradiance * sunUp * cloudDim * airMass;
+      this.keyDirection.copy(this.sunDirection);
+    } else {
+      kr = 0.6; kg = 0.72; kb = 1.0; // moonlight, Purkinje-shifted toward blue
+      kI = o.moonIrradiance * moonUp * cloudDim;
+      this.keyDirection.copy(this.moonDirection);
+    }
+    refractIntoWater(this.keyDirection, this.keyDirectionWater);
+    // Fresnel transmission of the direct beam into the water (grazing sun
+    // mostly reflects off the sea: low-sun shafts and caustics fade)
+    {
+      const ci = Math.max(this.keyDirection.y, 0.02);
+      const eta = 1 / IOR_WATER;
+      const st2 = eta * eta * (1 - ci * ci);
+      const ct = Math.sqrt(1 - st2);
+      const rs = (eta * ci - ct) / (eta * ci + ct);
+      const rp = (eta * ct - ci) / (eta * ct + ci);
+      waterData[16 * 4] = 1 - 0.5 * (rs * rs + rp * rp);
+    }
+    this.sun.color.setRGB(kr, kg, kb);
+    this.sun.intensity = kI;
+    this.sun.position.copy(this.keyDirectionWater).multiplyScalar(100);
+    this.daylight = sunUp;
+
+    // diffuse skylight, relative to a clear noon
+    const skyL = 0.0035 + 0.004 * moonUp + Math.pow(smooth(sSun, -0.18, 0.55), 1.6) * (1 - 0.3 * cover);
+    const keyUp = Math.max(this.keyDirection.y, 0);
+    const direct = (kI / o.sunIrradiance) * Math.min(1, keyUp / 0.8);
+    const light = Math.max(0.002, 0.55 * skyL + 0.45 * direct);
+    this.lightLevel = light;
+    setW(SLOT_LIGHT, light);
+
+    // underwater light field follows the surface light (slightly warm at golden hour)
+    const w0 = this._preset.w0;
+    const tint = 0.25 * warm * sunUp;
+    set3(1, w0[0] * light * (1 + tint), w0[1] * light, w0[2] * light * (1 - 0.5 * tint));
+    this.scene.environmentIntensity = light;
+    this.hemi.intensity = 0.12 * skyL;
+    set3(3, this.keyDirectionWater.x, this.keyDirectionWater.y, this.keyDirectionWater.z);
+    setW(3, this._preset.forward * THREE.MathUtils.clamp(direct / light, 0, 1.6));
+    set3(4, this.keyDirection.x, this.keyDirection.y, this.keyDirection.z);
+    set3(5, kr * kI, kg * kI, kb * kI);
+    setW(7, o.disc);
+    // caustics need a high, direct key light
+    setW(2, o.caustics * smooth(keyUp, 0.08, 0.45) * (1 - 0.7 * cover));
+
+    // sky
+    const sk = skyAt(sSun);
+    const mz = 0.0015 * moonUp;
+    set3(6, sk.zen[0] + mz, sk.zen[1] + mz * 1.3, sk.zen[2] + mz * 2.6);
+    set3(7, sk.hor[0] + mz, sk.hor[1] + mz * 1.2, sk.hor[2] + mz * 2);
+    const cd = 1 - 0.35 * cover;
+    set3(12, sk.cloud[0] * cd, sk.cloud[1] * cd, sk.cloud[2] * cd);
+    setW(12, cover);
+    set3(13, ...sk.glow);
+    setW(13, 1 - smooth(sSun, -0.22, -0.08));
+    set3(14, this.sunDirection.x, this.sunDirection.y, this.sunDirection.z);
+    setW(14, this.sky.marineLayer);
+    set3(15, ...sk.haze);
+  }
+
+  /** Cloud cover 0..1 and marine-layer (horizon fog bank) strength 0..1. */
+  setSky({ cloudCover, marineLayer } = {}) {
+    if (Number.isFinite(cloudCover)) this.sky.cloudCover = THREE.MathUtils.clamp(cloudCover, 0, 1);
+    if (Number.isFinite(marineLayer)) this.sky.marineLayer = THREE.MathUtils.clamp(marineLayer, 0, 1);
+    this.setTimeOfDay(this.hours);
+  }
+
+  // ---- wind / sea state --------------------------------------------------
+  /**
+   * Wind at 10 m: speed in knots, direction in degrees it blows FROM
+   * (meteorological, 0 = N, 90 = E). Drives wind-sea wavelength/steepness,
+   * streaks, whitecap coverage (Monahan-style, exaggerated for visibility),
+   * sun-glitter width and cloud drift.
+   */
+  setWind(speedKts, dirDeg) {
+    if (!Number.isFinite(speedKts)) return;
+    const kts = Math.max(0, speedKts);
+    const dir = Number.isFinite(dirDeg) ? dirDeg : this.wind.dirDeg;
+    this.wind.kts = kts;
+    this.wind.dirDeg = dir;
+    const U = kts * 0.5144;
+    // downwind = opposite of where it blows from; world x = east, z = south
+    const dx = -Math.sin(dir * D2R), dz = Math.cos(dir * D2R);
+    const cov = Math.min(0.2, 3.84e-6 * Math.pow(U, 3.41) * 4);
+    waterSlots.set3(10, dx, dz, U);
+    waterSlots.setW(10, cov);
+    waterSlots.setW(6, THREE.MathUtils.clamp(0.15 + U / 6, 0.15, 2.6));
+  }
+
+  /** Swell: significant height (m), period (s), direction it comes FROM (deg). */
+  setSwell(heightM, periodS, dirDeg) {
+    if (!Number.isFinite(heightM)) return;
+    this.swell = { height: heightM, period: periodS || this.swell.period, dirDeg: Number.isFinite(dirDeg) ? dirDeg : this.swell.dirDeg };
+    const d = this.swell.dirDeg * D2R;
+    const wl = 1.56 * this.swell.period * this.swell.period; // deep-water wavelength
+    waterSlots.set3(11, -Math.sin(d), Math.cos(d), heightM * 0.5);
+    waterSlots.setW(11, wl);
+  }
+
+  // ---- lights ------------------------------------------------------------
+  // Intensities are SURFACE values: the water shader attenuates them with the
+  // depth of every shaded point (and projects caustics onto the key term).
+  _buildLights() {
+    this.hemi = new THREE.HemisphereLight(0x9fd8ff, 0x0a2230, 0.12);
+    this.scene.add(this.hemi);
+
+    this.sun = new THREE.DirectionalLight(0xfff3e4, 2.7);
+    this.sun.position.set(0, 100, 0);
+    this.scene.add(this.sun);
+    this.scene.add(this.sun.target);
   }
 
   // Background dome: analytic infinite surface + sky + deep water.
@@ -518,12 +710,6 @@ export class World {
     this._fogColor.lerp(_tmpColor.set(zone.fog), 0.03);
     this.scene.fog.color.copy(this._fogColor);
     this.scene.fog.density = zone.density;
-
-    const targetExt = 1 + (zone.density / 0.016 - 1) * 0.5;
-    this._extScale += (targetExt - this._extScale) * 0.03;
-    const e = this._extScale;
-    const o = this.optics;
-    waterSlots.set3(0, o.ext[0] * e, o.ext[1] * e, o.ext[2] * e);
 
     if (index !== this._currentZone) {
       this._currentZone = index;
