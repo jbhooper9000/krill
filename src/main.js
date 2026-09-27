@@ -44,7 +44,7 @@ requestAnimationFrame(() => {
 
 const startScreen = $('start-screen');
 function startGame(species = ui.species) {
-  if (game.running) return;
+  if (game.running || ui.isLocked(species)) return;
   startScreen.classList.add('fading');
   setTimeout(() => startScreen.classList.add('hidden'), 450);
   game.start(species);

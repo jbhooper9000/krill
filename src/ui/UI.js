@@ -50,6 +50,10 @@ export const speciesFacts = (id) => {
   return `${len} m · ${s.mass} · dives ${s.dives}`;
 };
 const SPECIES_ORDER = ['humpback', 'blue', 'sperm'];
+// Species you can watch in the menu but not play yet. The sperm whale hunts
+// squid in the deep canyon; until that loop exists it isn't honest to let it
+// eat krill (playtest review 3).
+export const LOCKED_SPECIES = { sperm: 'Coming soon · deep-canyon squid hunting with echolocation' };
 
 // First-time control hints: each verb is explained once per session.
 const HINTS = {
@@ -130,6 +134,7 @@ export class UI {
     const changed = id !== this.species;
     this.species = id;
     this.tabs.forEach((t) => {
+      t.classList.toggle('locked', !!LOCKED_SPECIES[t.dataset.species]);
       const on = t.dataset.species === id;
       t.setAttribute('aria-selected', String(on));
       t.tabIndex = on ? 0 : -1;
@@ -142,6 +147,14 @@ export class UI {
       $('sp-facts').textContent = speciesFacts(this.species);
       $('sp-desc').textContent = s.desc;
       info.classList.remove('out');
+      const locked = LOCKED_SPECIES[this.species];
+      const btn = $('start-btn');
+      btn.disabled = !!locked;
+      btn.classList.toggle('locked', !!locked);
+      const label = btn.querySelector('.btn-label');
+      if (label) label.textContent = locked ? 'Coming soon' : 'Dive in';
+      $('sp-locked').textContent = locked || '';
+      $('sp-locked').hidden = !locked;
     };
     clearTimeout(this._swapTimer);
     if (instant || !changed) fill();
@@ -150,6 +163,10 @@ export class UI {
       this._swapTimer = setTimeout(fill, 400);
     }
     if (this.onSelect) this.onSelect(id);
+  }
+
+  isLocked(id = this.species) {
+    return !!LOCKED_SPECIES[id];
   }
 
   // step through species with the arrow keys; returns the new id

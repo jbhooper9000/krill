@@ -1550,3 +1550,20 @@ button {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ---------- Species not yet playable ---------- */
+.sp-locked {
+  margin-top: 10px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--amber, #ffc27a);
+  opacity: 0.8;
+}
+.dive-btn.locked,
+.dive-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.dive-btn.locked .key { display: none; }
+.tab.locked { opacity: 0.55; }
