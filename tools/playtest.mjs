@@ -410,6 +410,44 @@ const scenarios = {
       if (name) await shot(name);
     }
   },
+  // Time of day (World.setTimeOfDay): underwater follow cam, looking up, and
+  // above the surface, at dawn / morning / noon / golden hour / dusk / night.
+  async daynight() {
+    await hideHud();
+    await evaljs(`krill.controller.position.y = -12; 1`);
+    const setT = (h) => evaljs(`(() => { if (krill.clock) krill.clock.hours = ${h}; krill.world.setTimeOfDay(${h}); krill.effects.resetExposure && krill.effects.resetExposure(); return krill.world.lightLevel.toFixed(4); })()`);
+    // cameras relative to the whale: safe with the floating origin
+    const view = (kind) => evaljs(`(() => { const c = krill.controller; const L = c.sp.length; c._updateCamera = function(){ const p = this.position;
+      if ('${kind}' === 'under') { this.camera.position.set(p.x + L*0.9, p.y + L*0.2, p.z + L*1.3); this.camera.lookAt(p.x, p.y, p.z); }
+      else if ('${kind}' === 'up') { this.camera.position.set(p.x + L*0.8, p.y - L*0.6, p.z + L*0.8); this.camera.lookAt(p.x, p.y + L*3, p.z); }
+      else { this.camera.position.set(p.x + L*0.9, 3, p.z + L*1.6); this.camera.lookAt(p.x, 1.2, p.z - L*3); } }; return 1; })()`);
+    for (const [h, tag] of [[6.1, 'dawn'], [9, 'morning'], [13, 'noon'], [19.2, 'golden'], [20.3, 'dusk'], [23.5, 'night']]) {
+      console.log('time', tag, await setT(h));
+      for (const kind of ['under', 'up', 'above']) {
+        await view(kind);
+        await evaljs(`krill.effects.resetExposure && krill.effects.resetExposure(); 1`);
+        await sleep(900);
+        await shot(`tod-${tag}-${kind}`);
+      }
+    }
+  },
+  // Sea state from above: calm / moderate / strong wind (World.setWind).
+  async sea() {
+    await hideHud();
+    await evaljs(`krill.controller.position.y = -12; if (krill.clock) krill.clock.hours = 16; krill.world.setTimeOfDay(16); 1`);
+    await evaljs(`(() => { const c = krill.controller; const L = c.sp.length; c._updateCamera = function(){ const p = this.position;
+      this.camera.position.set(p.x, 6, p.z + L); this.camera.lookAt(p.x - 40, 0, p.z - 120); }; return 1; })()`);
+    for (const kts of [4, 14, 26]) {
+      await evaljs(`krill.world.setWind(${kts}, 300); 1`);
+      await sleep(900);
+      await shot(`sea-${kts}kts`);
+    }
+    // looking into the sun: glitter path
+    await evaljs(`(() => { const s = krill.world.sunDirection; const c = krill.controller; c._updateCamera = function(){ const p = this.position;
+      this.camera.position.set(p.x, 5, p.z); this.camera.lookAt(p.x + s.x * 100, -25, p.z + s.z * 100); }; krill.world.setWind(14, 300); return 1; })()`);
+    await sleep(900);
+    await shot('sea-glitter');
+  },
   // Camera above the water (breach views): pinned at an absolute height.
   async above() {
     await hideHud();
