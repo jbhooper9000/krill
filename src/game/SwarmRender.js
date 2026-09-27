@@ -49,7 +49,7 @@ export const swarmUniforms = {
   uLunge: { value: 0 }, // 0..1, eased
   // readability gain on the krill skin radiance (documented compromise, see
   // swKrillPatch): lets a day patch read at 30-60 m in Monterey-green water
-  uPatchGain: { value: 3.0 },
+  uPatchGain: { value: 2.8 },
 };
 
 // Viewport-dependent uniforms, refreshed from onBeforeRender (the only place
@@ -310,17 +310,26 @@ void main() {
 	// the density field is drawn ~1.3x the flock's extent: the boids are the
 	// dense core the whale feeds in, the halo the diffuse edge of a real patch
 	vec3 boxC = uBoxMin + 0.5 * uBoxSize;
-	vec3 guv = ( boxC + ( p - boxC ) / uInflate + warp * 6.0 - uBoxMin ) / uBoxSize;
+	// second, small-scale warp octave: the flock's flat faces must not read as
+	// planes at close range (the large warp is locally straight)
+	vec3 warp2 = texture( uNoise, p * 0.028 + vec3( 0.5, uTime * 0.01, 0.2 ) ).rgb - 0.5;
+	vec3 guv = ( boxC + ( p - boxC ) / uInflate + warp * 6.0 + warp2 * 2.6 - uBoxMin ) / uBoxSize;
 	vec2 g = texture( uGrid, vec3( guv.x, max( guv.y, 0.5 / float( SW_GRID ) ), guv.z ) ).rg;
 	if ( uvw0.y < 0.0 ) g.r = 0.0; // under the box: shadow only
 	vec3 edge = min( uvw0, 1.0 - uvw0 );
-	float edgeF = smoothstep( 0.02, 0.3, min( edge.x, min( max( edge.y, uvw0.y < 0.0 ? 1.0 : 0.0 ), edge.z ) ) );
+	// horizontal footprint fade (shared by the krill and the shadow column
+	// below them) and the vertical fade (krill only: the column must run
+	// continuously through the box's bottom face, or that face shows as a plane)
+	float edgeXZ = smoothstep( 0.02, 0.3, min( edge.x, edge.z ) );
+	float edgeF = edgeXZ * smoothstep( 0.02, 0.3, max( edge.y, 0.0 ) );
 	// a crisp boundary: real patches have sharp (often flat) edges, the blurred
 	// splat is thresholded like an isosurface, with the interior kept
-	float n = g.r * smoothstep( 0.07, 0.16, g.r ) * ( uDensMax / 0.95 ) * edgeF; // boids / m^3
+	// noisy threshold: the boundary billows instead of following a level set
+	float th = 0.04 + 0.12 * texture( uNoise, p * 0.06 + vec3( 0.2, 0.7, uTime * 0.005 ) ).a;
+	float n = g.r * smoothstep( th, th + 0.09, g.r ) * ( uDensMax / 0.95 ) * edgeF; // boids / m^3
 	// patchiness: krill aggregate in sheets and knots that slowly churn
-	// sheets are flattened vertically (krill layer), knots and grain churn slowly
-	vec3 sp = p * vec3( 1.0, 2.2, 1.0 );
+	// sheets are mildly flattened vertically (krill layer), knots and grain churn
+	vec3 sp = p * vec3( 1.0, 1.6, 1.0 );
 	float nz = texture( uNoise, ( sp * 0.2 + vec3( 0.0, uTime * 0.04, uTime * 0.03 ) ) * 0.125 ).a * 0.55
 		+ texture( uNoise, ( sp * 0.7 - vec3( uTime * 0.07, 0.0, 0.0 ) ) * 0.125 + 0.37 ).a * 0.3
 		+ texture( uNoise, ( p * 2.3 + vec3( 0.0, 0.0, uTime * 0.1 ) ) * 0.125 + 0.71 ).a * 0.15;
@@ -340,23 +349,32 @@ void main() {
 	float los = length( p - cameraPosition - cw * ts );
 	float tunnel = ts < 0.999 ? smoothstep( uWhaleLen * 0.15, uWhaleLen * 0.45, los ) : 1.0;
 	n *= mix( 0.15, 1.0, tunnel );
-	n *= smoothstep( 1.5, 7.0, length( p - cameraPosition ) );
+	// inside a patch you see ~10 m into the haze, not a wall at the lens
+	n *= smoothstep( 1.5, 12.0, length( p - cameraPosition ) );
 	float sigma = n * uSigma;
 	// the patch shades the water under it: in that column the water in-scatters
 	// less down-welling light, a darker "hole" hanging below the swarm. Modelled
 	// as missing in-scatter (black, weighted by the water's scattering ~0.6 c),
 	// fading with depth as side light fills it in.
-	float shadowK = ( 1.0 - g.g ) * edgeF * ( 1.0 - below ) * ( 1.0 - below );
+	float shadowK = ( 1.0 - g.g ) * edgeXZ * ( 1.0 - below ) * ( 1.0 - below );
 	float sigmaS = shadowK * 0.6 * kwExtAt( p.y - KW_LEVEL ).g * SW_SHADOW_GAIN;
+	#ifdef SW_DEPTH_ONLY
+		// depth of the patch's dense body (see SwarmVolume: depth pass)
+		if ( sigma < 0.035 ) discard;
+		gl_FragColor = vec4( 0.0 );
+		return;
+	#endif
 	float a = 1.0 - exp( - ( sigma + sigmaS ) * ds );
 	if ( a < 0.002 ) discard;
 	vec3 col = swKrillPatch( p, - dir, g.g ) * ( 0.6 + 0.6 * knots ) * ( sigma / max( sigma + sigmaS, 1e-6 ) );
 	gl_FragColor = vec4( col, a );
-	// water model along the view ray. Readability compromise (like KW_FLOOR):
-	// beyond ~10 m the patch is fogged as if up to ~2.2x closer (0.45 by 60 m),
-	// so the prey reads by eye at 30-60 m in Monterey-green water (N3).
+	// water model along the view ray. Near and mid range, readability comes
+	// from the post-process dehaze (it sees the patch through the depth pass).
+	// Dehaze caps its gain at 3x T, which fades a patch beyond ~60 m, so far
+	// patches are additionally fogged as if up to 25% closer (35 -> 90 m):
+	// a documented readability compromise, like KW_FLOOR.
 	float dCam = length( vKwWorld - cameraPosition );
-	vec3 pFog = cameraPosition + ( vKwWorld - cameraPosition ) * mix( 1.0, 0.45, smoothstep( 10.0, 60.0, dCam ) );
+	vec3 pFog = cameraPosition + ( vKwWorld - cameraPosition ) * mix( 1.0, 0.75, smoothstep( 35.0, 90.0, dCam ) );
 	gl_FragColor.rgb = kwWater( gl_FragColor.rgb, cameraPosition, pFog );
 }
 `;
@@ -416,6 +434,28 @@ class SwarmVolume {
     this.mesh.renderOrder = 5;
     this.mesh.onBeforeRender = updateSwarmViewport;
     scene.add(this.mesh);
+    // Depth pass: after the colour slices, the patch's dense body writes depth
+    // (front-most slice wins: slices draw back to front). Post effects that read
+    // the depth buffer (dehaze, light shafts) then see the swarm instead of the
+    // terrain far behind it; without this, dehaze re-grades swarm pixels as far
+    // seabed and the terrain's horizon cuts straight lines through the patch.
+    // Shares the uniforms object (same state), no colour writes.
+    this.depthMaterial = new THREE.ShaderMaterial({
+      uniforms: this.material.uniforms,
+      defines: { ...this.material.defines, SW_DEPTH_ONLY: '' },
+      vertexShader: volumeVert,
+      fragmentShader: volumeFrag,
+      transparent: true,
+      colorWrite: false,
+      depthWrite: true,
+      side: THREE.DoubleSide,
+    });
+    this.depthMaterial.fog = true;
+    this.depthMesh = new THREE.Mesh(geo, this.depthMaterial);
+    this.depthMesh.frustumCulled = false;
+    this.depthMesh.renderOrder = 5.5;
+    this.depthMesh.onBeforeRender = updateSwarmViewport;
+    scene.add(this.depthMesh);
     this.center = new THREE.Vector3();
     this.radius = 1;
   }
@@ -433,8 +473,8 @@ class SwarmVolume {
       if (z < z0) z0 = z; if (z > z1) z1 = z;
       n++;
     }
-    if (n < 4) { this.mesh.visible = false; return; }
-    this.mesh.visible = true;
+    if (n < 4) { this.mesh.visible = this.depthMesh.visible = false; return; }
+    this.mesh.visible = this.depthMesh.visible = true;
     const m = 11; // margin so the blurred edge fades to zero inside the box
     x0 -= m; y0 -= m; z0 -= m; x1 += m; y1 += m; z1 += m;
     const G = GRID, sx = (x1 - x0) / G, sy = (y1 - y0) / G, sz = (z1 - z0) / G;
@@ -463,7 +503,7 @@ class SwarmVolume {
     // encode density and the skylight transmittance: at depth the down-welling
     // field is diffuse (horizontal radiance ~1/3 of vertical), so a point is lit
     // through the krill above it AND through the thinnest horizontal path out
-    // of the patch: T = 0.65 T_down + 0.35 max(T_+x, T_-x, T_+z, T_-z)
+    // of the patch: T = 0.65 T_down + 0.35 mean(T_+x, T_-x, T_+z, T_-z)
     const out = this.bytes;
     const sig = SIGMA_PER_BOID;
     const td = this._tDown || (this._tDown = new Float32Array(G * G * G));
@@ -487,8 +527,7 @@ class SwarmVolume {
         for (let a = 0; a < G; a++) {
           const k = base + (step > 0 ? a : G - 1 - a) * stride;
           od += d[k] * sig * span * 0.5;
-          const t = Math.exp(-od);
-          if (t > ts[k]) ts[k] = t;
+          ts[k] += 0.25 * Math.exp(-od); // mean of the 4 directions (a max gives planar kinks)
           od += d[k] * sig * span * 0.5;
         }
       }
@@ -531,8 +570,10 @@ class SwarmVolume {
 
   dispose(scene) {
     scene.remove(this.mesh);
+    scene.remove(this.depthMesh);
     this.mesh.geometry.dispose();
     this.material.dispose();
+    this.depthMaterial.dispose();
     this.tex.dispose();
   }
 }
@@ -899,6 +940,7 @@ export class KrillSwarmView {
     // at renderOrder 10: swarms must come after it; from the air, before it
     const under = cam.y < 0;
     this.volume.mesh.renderOrder = under ? 12 : 5;
+    this.volume.depthMesh.renderOrder = under ? 12.5 : 5.5;
     this.specks.renderOrder = under ? 13 : 6;
     this.near.renderOrder = under ? 14 : 7;
     const len = 0.045 * lenScale;
