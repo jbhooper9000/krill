@@ -301,11 +301,14 @@ vec3 tPerturb(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDir) {
     vec3 land = mix(beach, scrub, smoothstep(2.0, 5.0, h + (mid - 0.5) * 2.5));
     land = mix(land, mix(granite, granite * 0.8 + 0.06, smoothstep(6.0, 14.0, h)), max(shore, cliff * smoothstep(2.0, 6.0, h)));
     // swash / foam line on the beach (weaker against rock): moves with the surge
-    float swash = 0.35 * sin(uTime * 0.7 + P.x * 0.021 + P.y * 0.017) + 0.15 * sin(uTime * 1.9 + P.y * 0.05);
+    float swash = 0.3 * sin(uTime * 0.7 + P.x * 0.021 + P.y * 0.017) + 0.12 * sin(uTime * 1.9 + P.y * 0.05);
     // (only on a sloping shore: on dead-flat tidal ground the band would smear
     // into big white sheets)
     float shoreSlope = smoothstep(0.02, 0.08, length(vec2(dFdx(h), dFdy(h))) / max(1e-3, fwc));
-    float band = 1.0 - smoothstep(0.0, 0.25, abs(h - 0.1 - swash));
+    // the swash zone only: foam lives on wet sand/rock between -1.5 m and the
+    // top of the run-up (+0.3 m), never on the dry beach
+    float band = (1.0 - smoothstep(0.0, 0.25, abs(h + 0.35 - swash)))
+               * smoothstep(-1.5, -1.0, h) * (1.0 - smoothstep(0.1, 0.3, h));
     float lace = smoothstep(0.45, 0.8, texture2D(uDetail, P / 6.0 + vec2(uTime * 0.02, 0.0)).g + band * 0.3);
     land = mix(land, vec3(0.85, 0.87, 0.84), band * lace * mix(0.7, 0.35, shore) * shoreSlope);
     col = mix(col, land, smoothstep(-2.0, 0.3, h));

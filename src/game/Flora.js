@@ -65,90 +65,126 @@ function canvasTexture(w, h, draw) {
 }
 
 // One Macrocystis blade, base at (x0, y0) pointing along -y rotated by ang:
-// lanceolate, ruffled margin, transverse corrugations, a small gas bladder
+// lanceolate with a ruffled margin, soft mottling and a faint midrib (no fine
+// line patterns: they alias into shimmer at a distance), and a gas bladder
 // (pneumatocyst) at the base.
 function drawBlade(g, x0, y0, len, wid, ang, r, shade = 1) {
   const k = shade;
+  const c = (R, G, B, a = 1) => `rgba(${Math.min(255, R * k) | 0},${Math.min(255, G * k) | 0},${Math.min(255, B * k) | 0},${a})`;
   g.save();
   g.translate(x0, y0);
   g.rotate(ang);
-  const pts = 18;
+  const pts = 16;
+  const ph = r() * 6;
   g.beginPath();
   g.moveTo(0, 0);
   for (let i = 1; i <= pts; i++) {
     const t = i / pts;
-    const w = wid * Math.sin(Math.PI * Math.pow(t, 0.8)) * (0.9 + 0.2 * Math.sin(t * 37 + r() * 3));
+    const w = wid * Math.sin(Math.PI * Math.pow(t, 0.75)) * (0.85 + 0.25 * Math.sin(t * 23 + ph));
     g.lineTo(w * 0.5, -t * len);
   }
   for (let i = pts; i >= 1; i--) {
     const t = i / pts;
-    const w = wid * Math.sin(Math.PI * Math.pow(t, 0.8)) * (0.9 + 0.2 * Math.sin(t * 29 + 1.3));
+    const w = wid * Math.sin(Math.PI * Math.pow(t, 0.75)) * (0.85 + 0.25 * Math.sin(t * 19 + ph + 1.3));
     g.lineTo(-w * 0.5, -t * len);
   }
   g.closePath();
   const grad = g.createLinearGradient(0, 0, 0, -len);
-  grad.addColorStop(0, `rgb(${120 * k | 0},${88 * k | 0},${34 * k | 0})`);
-  grad.addColorStop(0.5, `rgb(${168 * k | 0},${128 * k | 0},${52 * k | 0})`);
-  grad.addColorStop(1, `rgb(${150 * k | 0},${118 * k | 0},${48 * k | 0})`);
+  grad.addColorStop(0, c(118, 86, 34));
+  grad.addColorStop(0.45, c(170, 128, 52));
+  grad.addColorStop(1, c(150, 116, 46));
   g.fillStyle = grad;
   g.fill();
-  // corrugations
   g.clip();
-  for (let i = 0; i < len / 3; i++) {
-    const y = -i * 3 - r() * 2;
-    g.strokeStyle = i % 2 ? 'rgba(60,40,10,0.13)' : 'rgba(230,200,120,0.09)';
-    g.lineWidth = 1.2;
-    g.beginPath();
-    g.moveTo(-wid, y);
-    g.quadraticCurveTo(0, y - 2, wid, y + 1);
-    g.stroke();
+  // soft mottling (large, low-contrast blotches)
+  for (let i = 0; i < 5; i++) {
+    const y = -r() * len, rad = wid * (0.4 + r() * 0.6);
+    const rg = g.createRadialGradient(0, y, 0, 0, y, rad);
+    const light = r() < 0.5;
+    rg.addColorStop(0, light ? 'rgba(235,200,120,0.18)' : 'rgba(70,48,14,0.18)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = rg;
+    g.fillRect(-wid, y - rad, wid * 2, rad * 2);
   }
+  // faint wide midrib
+  const mr = g.createLinearGradient(-wid * 0.2, 0, wid * 0.2, 0);
+  mr.addColorStop(0, 'rgba(0,0,0,0)');
+  mr.addColorStop(0.5, 'rgba(90,64,20,0.16)');
+  mr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = mr;
+  g.fillRect(-wid * 0.2, -len, wid * 0.4, len);
   g.restore();
-  // pneumatocyst
+  // pneumatocyst: a soft darker bulb at the base
   g.save();
   g.translate(x0, y0);
   g.rotate(ang);
-  g.fillStyle = `rgb(${128 * k | 0},${96 * k | 0},${38 * k | 0})`;
+  const b = g.createRadialGradient(0, -wid * 0.08, 0, 0, -wid * 0.08, wid * 0.3);
+  b.addColorStop(0, c(150, 112, 44));
+  b.addColorStop(0.7, c(112, 82, 30));
+  b.addColorStop(1, c(112, 82, 30, 0));
+  g.fillStyle = b;
   g.beginPath();
-  g.ellipse(0, -wid * 0.05, wid * 0.16, wid * 0.28, 0, 0, Math.PI * 2);
+  g.ellipse(0, -wid * 0.08, wid * 0.2, wid * 0.32, 0, 0, Math.PI * 2);
   g.fill();
   g.restore();
 }
 
 function makeBladeTexture() {
-  const t = canvasTexture(64, 256, (g, w, h) => {
-    drawBlade(g, w / 2, h - 2, h - 6, w * 0.9, 0, rng(7));
+  const t = canvasTexture(128, 512, (g, w, h) => {
+    drawBlade(g, w / 2, h - 4, h - 10, w * 0.9, 0, rng(7));
   });
-  if (t) t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  if (t) { t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.anisotropy = 8; }
   return t;
 }
 
-// far-LOD plant silhouette: stipes fanning up, lined with blades
+// Far-LOD plant silhouettes: an atlas of 4 different plants side by side
+// (128 x 512 each), picked per instance in the shader.
+const CARD_VARIANTS = 4;
 function makePlantTexture() {
-  return canvasTexture(128, 512, (g, w, h) => {
-    const r = rng(21);
-    for (let s = 0; s < 5; s++) {
-      const bx = w * 0.35 + (r() - 0.5) * 10;
-      const top = Math.min(w - 8, bx + w * (0.1 + 0.45 * r()));
-      g.strokeStyle = 'rgb(96,74,30)';
-      g.lineWidth = 1.6;
+  const t = canvasTexture(128 * CARD_VARIANTS, 512, (g, W, h) => {
+    const w = 128;
+    for (let v = 0; v < CARD_VARIANTS; v++) {
+      const r = rng(21 + v * 97);
+      g.save();
       g.beginPath();
-      g.moveTo(bx, h);
-      g.bezierCurveTo(bx, h * 0.6, top + (r() - 0.5) * 20, h * 0.3, top, 4);
-      g.stroke();
-      for (let b = 0; b < 34; b++) {
-        const t = b / 34;
-        const x = bx + (top - bx) * t * t + Math.sin(t * 6 + s) * 3;
-        const y = h - t * (h - 6);
-        drawBlade(g, x, y, 22 + r() * 14, 10 + r() * 5, Math.PI / 2 + (r() - 0.35) * 1.1, r, 0.8 + r() * 0.3);
+      g.rect(v * w, 0, w, h);
+      g.clip();
+      const ox = v * w;
+      const stipes = 4 + Math.floor(r() * 4);
+      const lean = (r() - 0.5) * 0.5;
+      for (let s = 0; s < stipes; s++) {
+        const bx = ox + w * 0.5 + (r() - 0.5) * 16;
+        const reach = 0.55 + r() * 0.45; // some stipes stop short of the surface
+        const topY = h - reach * (h - 6);
+        const top = Math.max(ox + 10, Math.min(ox + w - 10, bx + w * (lean + (r() - 0.5) * 0.7)));
+        const c1 = bx + (r() - 0.5) * 50, c2 = top + (r() - 0.5) * 50;
+        g.strokeStyle = 'rgb(96,74,30)';
+        g.lineWidth = 1.4;
+        g.beginPath();
+        g.moveTo(bx, h);
+        g.bezierCurveTo(c1, h - (h - topY) * 0.35, c2, h - (h - topY) * 0.7, top, topY);
+        g.stroke();
+        const n = Math.floor(28 * reach) + 8;
+        for (let b = 0; b < n; b++) {
+          const t = b / n;
+          // cubic bezier point
+          const mt = 1 - t;
+          const x = mt * mt * mt * bx + 3 * mt * mt * t * c1 + 3 * mt * t * t * c2 + t * t * t * top;
+          const y = h - t * (h - topY);
+          const ang = (r() < 0.5 ? 1 : -1) * (0.6 + r() * 1.3) + lean;
+          drawBlade(g, x, y, 18 + r() * 20, 8 + r() * 7, ang, r, 0.75 + r() * 0.4);
+        }
       }
+      g.restore();
     }
   });
+  if (t) { t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.anisotropy = 8; }
+  return t;
 }
 
 // surface canopy mat: a tangle of blades, densest in the middle, ragged edges
 function makeMatTexture() {
-  return canvasTexture(256, 256, (g, w, h) => {
+  const t = canvasTexture(256, 256, (g, w, h) => {
     const r = rng(33);
     for (let i = 0; i < 420; i++) {
       const rad = Math.pow(r(), 0.6);
@@ -158,6 +194,8 @@ function makeMatTexture() {
       drawBlade(g, x, y, 26 + r() * 30, 9 + r() * 7, ang, r, 0.65 + r() * 0.5);
     }
   });
+  if (t) t.anisotropy = 8;
+  return t;
 }
 
 // ---- geometry ----------------------------------------------------------------------
@@ -180,81 +218,95 @@ function makeRockGeometry(detail) {
 
 // Near-LOD kelp plant, unit height (instance y-scale = plant height in m; x/z
 // scale 1 so blade sizes stay in metres; vertical blade extents are authored
-// for a ~15 m plant).
+// for a ~15 m plant). aFlex = 0 on stipes and blade bases, rising to 1 at the
+// blade tips: the shader flutters blades by it.
 function makeKelpPlantGeometry() {
-  const pos = [], nor = [], uv = [], idx = [];
+  const pos = [], nor = [], uv = [], flex = [], idx = [];
   const H = 15;
-  const quad = (a, b, c, d, n, uvs) => {
+  const quad = (a, b, c, d, n, uvs, f) => {
     const base = pos.length / 3;
     for (const v of [a, b, c, d]) { pos.push(...v); nor.push(...n); }
     uv.push(...uvs);
+    flex.push(...f);
     idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   };
-  const SOLID = [0.45, 0.4, 0.55, 0.4, 0.55, 0.42, 0.45, 0.42]; // solid middle of the blade texture
-  const BLADE = [0, 0, 1, 0, 1, 1, 0, 1]; // u across, v along (base at v=0)
+  const SOLID = [0.45, 0.45, 0.55, 0.45, 0.55, 0.47, 0.45, 0.47]; // solid middle of the blade texture
   const r = rng(12345);
-  const stipes = 5;
+  const stipes = 6;
   for (let s = 0; s < stipes; s++) {
-    // the current flows toward +x: stipes fan out a little and lean downstream
-    const a0 = (s / stipes) * Math.PI * 2 + r() * 0.8;
-    const spread = 0.3 + r() * 0.9;
+    // stipes fan out from the holdfast and wander; some are young fronds that
+    // stop short of the surface
+    const a0 = (s / stipes) * Math.PI * 2 + r() * 0.9;
+    const reach = s < 4 ? 1 : 0.45 + r() * 0.4;
+    const spread = 0.4 + r() * 1.2;
     const bx = Math.cos(a0) * 0.15, bz = Math.sin(a0) * 0.15;
-    const tx = Math.cos(a0) * spread + 1.2 + r() * 1.8, tz = Math.sin(a0) * spread;
-    const wob = r() * 6;
+    const tx = Math.cos(a0) * spread + 0.6 + r() * 1.2, tz = Math.sin(a0) * spread;
+    const w1 = r() * 6, w2 = r() * 6, f1 = 3 + r() * 3, f2 = 7 + r() * 4;
     const at = (y) => {
       const k = y * y * (3 - 2 * y);
-      return [bx + (tx - bx) * k + Math.sin(y * 5 + wob) * 0.3, y, bz + (tz - bz) * k + Math.cos(y * 4 + wob) * 0.3];
+      return [
+        bx + (tx - bx) * k + Math.sin(y * f1 + w1) * 0.45 + Math.sin(y * f2 + w2) * 0.12,
+        y,
+        bz + (tz - bz) * k + Math.cos(y * f1 * 0.8 + w2) * 0.4 + Math.cos(y * f2 + w1) * 0.1,
+      ];
     };
-    // stipe ribbon
-    const segs = 6, w = 0.01;
+    // stipe ribbon, following the curve
+    const segs = 10, w = 0.012;
     for (let i = 0; i < segs; i++) {
-      const p0 = at(i / segs), p1 = at((i + 1) / segs);
-      quad([p0[0] - w, p0[1], p0[2]], [p0[0] + w, p0[1], p0[2]], [p1[0] + w, p1[1], p1[2]], [p1[0] - w, p1[1], p1[2]], [0, 0, 1], SOLID);
+      const p0 = at((i / segs) * reach), p1 = at(((i + 1) / segs) * reach);
+      quad([p0[0] - w, p0[1], p0[2]], [p0[0] + w, p0[1], p0[2]], [p1[0] + w, p1[1], p1[2]], [p1[0] - w, p1[1], p1[2]], [0, 0, 1], SOLID, [0, 0, 0, 0]);
     }
-    // blades: 30-80 cm, rising at 25-60 deg from their bladder on alternating sides
-    // blades: 45-95 cm, streaming downstream from their bladders, drooping,
-    // bent in two segments so they don't read as flat cards
-    const blades = 34;
+    // blades: 40-110 cm, in irregular clusters, drooping, bent in two
+    // segments and rolled so they aren't flat cards
+    const blades = Math.round(40 * reach);
     for (let b = 0; b < blades; b++) {
-      const y = 0.04 + (b / blades) * 0.92 + r() * 0.015;
+      const y = Math.min(reach, (0.03 + (b / blades) * 0.95 + (r() - 0.5) * 0.03) * reach);
       const p = at(y);
-      const az = (b % 2 ? 1 : -1) * (0.25 + r() * 0.6) + (r() - 0.5) * 0.4;
-      const len = 0.5 + r() * 0.5, wid = 0.15 + r() * 0.15;
-      const el = 0.35 - r() * 0.55, el2 = el - 0.3 - r() * 0.3;
+      const az = r() * Math.PI * 2;
+      const len = 0.4 + r() * 0.7 * (0.6 + 0.4 * y), wid = 0.12 + r() * 0.2;
+      const el = 0.4 - r() * 0.7, el2 = el - 0.25 - r() * 0.45;
+      const roll = (r() - 0.5) * 1.4;
       const ca = Math.cos(az), sa = Math.sin(az);
-      const sx = -sa * wid * 0.5, sz = ca * wid * 0.5; // horizontal width axis
+      // width axis: horizontal, rolled up/down a little
+      const sx = -sa * wid * 0.5 * Math.cos(roll), sz = ca * wid * 0.5 * Math.cos(roll), sy = (wid * 0.5 * Math.sin(roll)) / H;
       const h1 = len * 0.5;
       const m = [p[0] + ca * Math.cos(el) * h1, p[1] + (Math.sin(el) * h1) / H, p[2] + sa * Math.cos(el) * h1];
       const t = [m[0] + ca * Math.cos(el2) * h1, m[1] + (Math.sin(el2) * h1) / H, m[2] + sa * Math.cos(el2) * h1];
       const n = [-ca * Math.sin(el), Math.cos(el), -sa * Math.sin(el)];
-      quad([p[0] - sx * 0.5, p[1], p[2] - sz * 0.5], [p[0] + sx * 0.5, p[1], p[2] + sz * 0.5], [m[0] + sx, m[1], m[2] + sz], [m[0] - sx, m[1], m[2] - sz], n,
-        [0.25, 0, 0.75, 0, 1, 0.5, 0, 0.5]);
-      quad([m[0] - sx, m[1], m[2] - sz], [m[0] + sx, m[1], m[2] + sz], [t[0] + sx * 0.6, t[1], t[2] + sz * 0.6], [t[0] - sx * 0.6, t[1], t[2] - sz * 0.6], n,
-        [0, 0.5, 1, 0.5, 1, 1, 0, 1]);
+      quad([p[0] - sx * 0.4, p[1] - sy * 0.4, p[2] - sz * 0.4], [p[0] + sx * 0.4, p[1] + sy * 0.4, p[2] + sz * 0.4],
+        [m[0] + sx, m[1] + sy, m[2] + sz], [m[0] - sx, m[1] - sy, m[2] - sz], n,
+        [0.3, 0, 0.7, 0, 1, 0.5, 0, 0.5], [0, 0, 0.5, 0.5]);
+      quad([m[0] - sx, m[1] - sy, m[2] - sz], [m[0] + sx, m[1] + sy, m[2] + sz],
+        [t[0] + sx * 0.5, t[1] + sy * 0.5, t[2] + sz * 0.5], [t[0] - sx * 0.5, t[1] - sy * 0.5, t[2] - sz * 0.5], n,
+        [0, 0.5, 1, 0.5, 1, 1, 0, 1], [0.5, 0.5, 1, 1]);
     }
-    // trailing blades lying on the surface at the top
-    const top = at(1);
-    for (let b = 0; b < 4; b++) {
-      const az = (r() - 0.5) * 0.8;
-      const d0 = 0.2 + b * 0.55;
-      const len = 0.5 + r() * 0.4, wid = 0.12 + r() * 0.06;
-      const ox = top[0] + d0, oz = top[2] + (r() - 0.5) * 0.4;
-      const dx = Math.cos(az), dz = Math.sin(az);
-      const sx = -dz * wid * 0.5, sz = dx * wid * 0.5;
-      const y = 1 - (0.1 + r() * 0.15) / H;
-      quad([ox - sx, y, oz - sz], [ox + sx, y, oz + sz], [ox + dx * len + sx, y, oz + dz * len + sz], [ox + dx * len - sx, y, oz + dz * len - sz],
-        [0, 1, 0], BLADE);
+    // trailing blades lying on the surface at the top of full-length fronds
+    if (reach === 1) {
+      const top = at(1);
+      for (let b = 0; b < 5; b++) {
+        const az = (r() - 0.5) * 1.4 + a0 * 0.3;
+        const d0 = 0.2 + b * 0.5;
+        const len = 0.6 + r() * 0.5, wid = 0.14 + r() * 0.08;
+        const ox = top[0] + d0 * Math.cos(az * 0.5), oz = top[2] + d0 * Math.sin(az * 0.5);
+        const dx = Math.cos(az), dz = Math.sin(az);
+        const sx = -dz * wid * 0.5, sz = dx * wid * 0.5;
+        const y = 1 - (0.1 + r() * 0.15) / H;
+        quad([ox - sx, y, oz - sz], [ox + sx, y, oz + sz], [ox + dx * len + sx, y, oz + dz * len + sz], [ox + dx * len - sx, y, oz + dz * len - sz],
+          [0, 1, 0], [0, 0, 1, 0, 1, 1, 0, 1], [0.2, 0.2, 1, 1]);
+      }
     }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('aFlex', new THREE.Float32BufferAttribute(flex, 1));
   g.setIndex(idx);
   return g;
 }
 
-// Far-LOD kelp: two crossed cards, 3.2 m wide, unit height
+// Far-LOD kelp: two crossed cards, 3.2 m wide, unit height (the atlas variant
+// is chosen per instance in the shader)
 function makeKelpCardGeometry() {
   const w = 1.6;
   const pos = [-w, 0, 0, w, 0, 0, w, 1, 0, -w, 1, 0, 0, 0, -w, 0, 0, w, 0, 1, w, 0, 1, -w];
@@ -264,6 +316,7 @@ function makeKelpCardGeometry() {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('aFlex', new THREE.Float32BufferAttribute(new Array(8).fill(0), 1));
   g.setIndex([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
   return g;
 }
@@ -272,34 +325,66 @@ function makeKelpCardGeometry() {
 function makeMatGeometry() {
   const g = new THREE.PlaneGeometry(1, 1, 2, 2);
   g.rotateX(-Math.PI / 2);
+  const p = g.attributes.position;
+  const f = [];
+  for (let i = 0; i < p.count; i++) f.push(Math.min(1, Math.hypot(p.getX(i), p.getZ(i)) * 1.6));
+  g.setAttribute('aFlex', new THREE.Float32BufferAttribute(f, 1));
   return g;
 }
 
 // ---- materials -------------------------------------------------------------------
+// Sway: (1) the whole plant leans with a slow, coherent surge that travels
+// shoreward, tethered at the holdfast; (2) a slower bending wave travels up
+// each stipe so it curves along its length; (3) blades flutter by aFlex.
+// LOD: near plants dither out and far cards dither in over 18-26 m.
 const SWAY_GLSL = /* glsl */ `
 vec4 mvPosition = vec4( transformed, 1.0 );
+float kHeight = 1.0;
+vec2 kInst = vec2( 0.0 );
 #ifdef USE_INSTANCING
+	kHeight = length( instanceMatrix[1].xyz );
+	kInst = instanceMatrix[3].xz;
 	mvPosition = instanceMatrix * mvPosition;
 #endif
 {
-	// surge: slow, coherent across the forest, travelling shoreward; stipes are
-	// tethered at the holdfast, the canopy moves as a whole
 	vec2 wp = mvPosition.xz + uAnchor;
-	float ph = uTime * 0.55 - dot(wp, vec2(0.045, 0.03));
+	vec2 ip = kInst + uAnchor;
+	float ph = uTime * 0.55 - dot( wp, vec2( 0.045, 0.03 ) );
 	#ifdef KELP_MAT
-		float a = 1.2 + 0.3 * sin(dot(wp, vec2(0.21, 0.17)));
-		mvPosition.y += 0.06 * sin(uTime * 1.3 + dot(wp, vec2(0.9, 0.7)));
+		float a = 1.2 + 0.3 * sin( dot( wp, vec2( 0.21, 0.17 ) ) );
+		mvPosition.y += 0.06 * sin( uTime * 1.3 + dot( wp, vec2( 0.9, 0.7 ) ) );
 	#else
 		float hy = position.y;
-		float a = hy * hy * (1.3 + 0.4 * sin(dot(wp, vec2(0.7, 1.3))));
+		float a = hy * hy * ( 1.1 + 0.4 * sin( dot( ip, vec2( 0.7, 1.3 ) ) ) );
+		// bending wave up the stipe (per stipe phase from its local position)
+		float sp = dot( ip, vec2( 0.37, 0.21 ) ) + dot( position.xz, vec2( 2.1, 1.7 ) );
+		float wv = uTime * 0.7 - hy * kHeight * 0.4 + sp;
+		float bend = hy * ( 1.2 - hy ) * min( kHeight, 25.0 ) * 0.045;
+		mvPosition.x += sin( wv ) * bend;
+		mvPosition.z += cos( wv * 0.8 + 1.1 ) * bend * 0.8;
 	#endif
-	mvPosition.x += (sin(ph) + 0.35 * sin(ph * 2.3 + 1.7)) * a;
-	mvPosition.z += (0.6 * cos(ph * 0.8 + 1.3)) * a;
+	mvPosition.x += ( sin( ph ) + 0.35 * sin( ph * 2.3 + 1.7 ) ) * a;
+	mvPosition.z += ( 0.6 * cos( ph * 0.8 + 1.3 ) ) * a;
+	// blade flutter
+	float fp = uTime * 2.6 + dot( wp, vec2( 3.1, 2.7 ) ) + position.y * 37.0;
+	mvPosition.y += sin( fp ) * 0.08 * aFlex;
+	mvPosition.x += cos( fp * 0.8 ) * 0.06 * aFlex;
+	mvPosition.z += sin( fp * 1.1 + 0.7 ) * 0.06 * aFlex;
+	#if defined( KELP_FADE_OUT ) || defined( KELP_FADE_IN )
+		vec3 iw = ( modelMatrix * vec4( kInst.x, 0.0, kInst.y, 1.0 ) ).xyz;
+		vKelpFade = smoothstep( 18.0, 26.0, length( iw.xz - cameraPosition.xz ) );
+	#endif
 }
 mvPosition = modelViewMatrix * mvPosition;
 gl_Position = projectionMatrix * mvPosition;`;
 
-function makeKelpMaterial(map, uniforms, { mat = false } = {}) {
+const KELP_FRAG_HEAD = /* glsl */ `
+uniform float uLight;
+varying float vKelpFade;
+float kBayer2( vec2 a ) { a = floor( a ); return fract( a.x / 2.0 + a.y * a.y * 0.75 ); }
+float kBayer4( vec2 a ) { return kBayer2( 0.5 * a ) * 0.25 + kBayer2( a ); }`;
+
+function makeKelpMaterial(map, uniforms, { mat = false, fade = null, card = false } = {}) {
   const m = new THREE.MeshStandardMaterial({
     color: map ? 0xffffff : 0x8a6a2c,
     map,
@@ -310,13 +395,33 @@ function makeKelpMaterial(map, uniforms, { mat = false } = {}) {
   });
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
-    if (mat) shader.defines = { ...(shader.defines || {}), KELP_MAT: '' };
+    const defs = {};
+    if (mat) defs.KELP_MAT = '';
+    if (card) defs.KELP_CARD = '';
+    if (fade === 'out') defs.KELP_FADE_OUT = '';
+    if (fade === 'in') defs.KELP_FADE_IN = '';
+    shader.defines = { ...(shader.defines || {}), ...defs };
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uTime;\nuniform vec2 uAnchor;')
+      .replace('#include <common>', '#include <common>\nuniform float uTime;\nuniform vec2 uAnchor;\nattribute float aFlex;\nvarying float vKelpFade;')
+      .replace('#include <uv_vertex>', /* glsl */ `#include <uv_vertex>
+#if defined( KELP_CARD ) && defined( USE_INSTANCING ) && defined( USE_MAP )
+	{
+		vec2 ipv = mod( instanceMatrix[3].xz + uAnchor, 997.0 );
+		float variant = floor( fract( sin( dot( ipv, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 ) * ${CARD_VARIANTS}.0 );
+		vMapUv.x = ( clamp( vMapUv.x, 0.01, 0.99 ) + variant ) / ${CARD_VARIANTS}.0;
+	}
+#endif`)
       .replace('#include <project_vertex>', SWAY_GLSL);
-    // translucency: looking up toward the light, thin kelp tissue glows golden
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uLight;')
+      .replace('#include <common>', '#include <common>\n' + KELP_FRAG_HEAD)
+      .replace('#include <clipping_planes_fragment>', /* glsl */ `#include <clipping_planes_fragment>
+#ifdef KELP_FADE_OUT
+	if ( kBayer4( gl_FragCoord.xy ) > 1.0 - vKelpFade ) discard;
+#endif
+#ifdef KELP_FADE_IN
+	if ( kBayer4( gl_FragCoord.xy ) > vKelpFade ) discard;
+#endif`)
+      // translucency: looking up toward the light, thin kelp tissue glows golden
       .replace('#include <emissivemap_fragment>', /* glsl */ `#include <emissivemap_fragment>
 {
 	vec3 vdW = normalize( ( vec4( normalize( -vViewPosition ), 0.0 ) * viewMatrix ).xyz );
@@ -328,7 +433,7 @@ function makeKelpMaterial(map, uniforms, { mat = false } = {}) {
 	totalEmissiveRadiance += diffuseColor.rgb * vec3( 1.0, 0.82, 0.45 ) * ( 0.12 + 1.1 * up ) * exp( -0.09 * dd ) * uLight;
 }`);
   };
-  m.customProgramCacheKey = () => (mat ? 'krill-kelp-mat-v2' : 'krill-kelp-v2');
+  m.customProgramCacheKey = () => `krill-kelp-v3-${mat ? 'mat' : card ? 'card' : 'plant'}-${fade || ''}`;
   return m;
 }
 
@@ -475,7 +580,6 @@ class ScatterLayer {
           l.mesh.setMatrixAt(l.n, tmpM);
           if (it.color !== undefined) l.mesh.setColorAt(l.n, tmpC.setHex(it.color));
           l.n++;
-          break;
         }
       }
     }
@@ -543,8 +647,9 @@ export class Flora {
       cellSize: 32,
       generate: (i, j) => this._genKelp(i, j),
       meshes: [
-        { kind: 'plant', min: 0, max: 22, geometry: makeKelpPlantGeometry(), material: patch(makeKelpMaterial(makeBladeTexture(), u)), capacity: 1500 },
-        { kind: 'plant', min: 22, max: 90, geometry: makeKelpCardGeometry(), material: patch(makeKelpMaterial(makePlantTexture(), u)), capacity: 5000 },
+        // near and far bands overlap over 18-26 m, where they crossfade (dithered)
+        { kind: 'plant', min: 0, max: 26, geometry: makeKelpPlantGeometry(), material: patch(makeKelpMaterial(makeBladeTexture(), u, { fade: 'out' })), capacity: 1500 },
+        { kind: 'plant', min: 18, max: 90, geometry: makeKelpCardGeometry(), material: patch(makeKelpMaterial(makePlantTexture(), u, { fade: 'in', card: true })), capacity: 5000 },
         { kind: 'mat', min: 0, max: 110, geometry: makeMatGeometry(), material: patch(makeKelpMaterial(makeMatTexture(), u, { mat: true })), capacity: 6000 },
       ],
     });
@@ -625,14 +730,21 @@ export class Flora {
       if (reef < 0.15 && r() > 0.2) continue;
       // stipes reach the surface; the canopy lies on it
       const height = Math.max(2, depth - 0.15);
-      // ry near 0 everywhere: blades and canopy all stream with one current
-      out.push({ kind: 'plant', x, z, y: h - 0.2, ry: (r() - 0.5) * 0.6, sx: 1, sy: height, sz: 1 });
+      // every plant different: rotation, width, lean and a golden-to-olive tint
+      // (the shared current is applied as a bend in the shader)
+      const sc = 0.75 + r() * 0.55;
+      const k = 0.8 + r() * 0.35;
+      const tint = new THREE.Color(k * (0.95 + r() * 0.1), k * (0.88 + r() * 0.14), k * (0.75 + r() * 0.25));
+      out.push({
+        kind: 'plant', x, z, y: h - 0.2, rx: (r() - 0.5) * 0.12, ry: r() * Math.PI * 2, rz: (r() - 0.5) * 0.12,
+        sx: sc, sy: height, sz: sc, color: tint.getHex(),
+      });
       // this plant's canopy, streaming a little downstream
       if (depth > 4) {
         const s = 5 + r() * 5;
         out.push({
           kind: 'mat', x: x + 1.5 + r() * 2.5, z: z + (r() - 0.5) * 1.5, y: -0.15 - r() * 0.3,
-          ry: (r() - 0.5) * 0.7, sx: s, sy: 1, sz: s * (0.45 + r() * 0.3),
+          ry: (r() - 0.5) * 0.9, sx: s, sy: 1, sz: s * (0.45 + r() * 0.3), color: 0xffffff,
         });
       }
     }

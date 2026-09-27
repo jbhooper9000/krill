@@ -543,6 +543,12 @@ const scenarios = {
     console.log('perf kelp-inside', JSON.stringify({ all: { ms: ms(f1), ...i1 }, noFlora: { ms: ms(f2), ...i2 }, noTerrain: { ms: ms(f3), ...i3 } }));
     await view('kelp-below', [36.64205, -121.93802, -14], [36.64240, -121.93770, 0], [36.64225, -121.93780, -11]);
     await view('kelp-above', [36.64120, -121.93900, 7], [36.64230, -121.93760, -1], [36.64205, -121.93802, -4]);
+    // in-forest at 12 m (16 m of water), noon and golden hour
+    const setT = (h) => evaljs(`(() => { krill.clock.hours = ${h}; krill.world.setTimeOfDay && krill.world.setTimeOfDay(${h}); return 1; })()`);
+    await view('forest-noon', [36.64190, -121.93850, -12], [36.64240, -121.93760, -10], [36.64150, -121.93900, -12], 8000);
+    await setT(19.2);
+    await view('forest-golden', [36.64190, -121.93850, -12], [36.64240, -121.93760, -10], [36.64150, -121.93900, -12], 8000);
+    await setT(13);
     await view('kelp-lobos-inside', [36.52470, -121.94930, -8], [36.52510, -121.94860, -8], [36.52486, -121.94899, -8]);
     // Point Pinos rocky shore
     await shoreView('pinos-above', [36.6450, -121.9450], [36.6335, -121.9335], -6, 4, 220, 2);
