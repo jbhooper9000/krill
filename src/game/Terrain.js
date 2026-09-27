@@ -173,21 +173,25 @@ function makeDetailTexture() {
 // *albedo* as much as by normals: megaripple and ripple banding (troughs
 // collect darker shell hash and detritus), speckles, silt-vs-sand patches.
 // Per-vertex aTerrain = (rockiness 0..1, depth m, wrapped x, wrapped z) and
-// aSed = (silt 0..1, reef 0..1).
+// aSed = (silt 0..1, reef 0..1, rocky shore 0..1).
+// Above the waterline: tan beaches with a wet band and a moving swash/foam
+// line, dark wet granite headlands with algae and barnacle bands, grey cliff
+// faces, and cypress / coastal-scrub green with dry-grass patches on the bluffs.
 function makeTerrainMaterial() {
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.93, metalness: 0 });
-  const uniforms = { uDetail: { value: makeDetailTexture() } };
+  const uniforms = { uDetail: { value: makeDetailTexture() }, uTime: { value: 0 } };
   mat.userData.terrainUniforms = uniforms;
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec4 aTerrain;\nattribute vec2 aSed;\nvarying vec4 vTerrain;\nvarying vec2 vSed;')
+      .replace('#include <common>', '#include <common>\nattribute vec4 aTerrain;\nattribute vec3 aSed;\nvarying vec4 vTerrain;\nvarying vec3 vSed;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTerrain = aTerrain;\nvSed = aSed;');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', /* glsl */ `#include <common>
 varying vec4 vTerrain;
-varying vec2 vSed;
+varying vec3 vSed;
 uniform sampler2D uDetail;
+uniform float uTime;
 float tRockMask;
 // Everything sampled from P is periodic in ${WRAP}.0 m, so the per-chunk wrap
 // offsets are seamless: textures repeat at divisors of it and the wave
@@ -233,6 +237,12 @@ vec3 tPerturb(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDir) {
   return normalize(abs(fDet) * surf_norm - vGrad);
 }`)
       .replace('#include <map_fragment>', /* glsl */ `#include <map_fragment>
+#ifdef USE_FOG
+  // From the air the water surface mesh only covers ~300 m around the camera;
+  // past it the sky/horizon shader draws the sea. Don't let the seafloor show
+  // through as a dark band there (the land above the waterline stays).
+  if (cameraPosition.y > 0.2 && vKwWorld.y < -0.4 && length(vKwWorld.xz - cameraPosition.xz) > 285.0) discard;
+#endif
 {
   vec2 P = vTerrain.zw;
   float depth = vTerrain.y;
@@ -267,8 +277,39 @@ vec3 tPerturb(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDir) {
   float crust = smoothstep(0.5, 0.9, mid) * (1.0 - smoothstep(30.0, 200.0, depth)) * (0.5 + 0.5 * reef);
   rock = mix(rock, rock * vec3(1.45, 0.9, 0.95), crust);
   vec3 col = mix(sand, rock, tRockMask);
-  // dry land above the waterline
-  col = mix(col, vec3(0.52, 0.49, 0.38) * (0.8 + 0.3 * mid), smoothstep(0.0, -2.0, depth));
+  // ---- the coast: height above sea level h ----
+  float h = -depth;
+  if (h > -3.0) {
+    float shore = vSed.z;
+    float spk2 = texture2D(uDetail, P / 1.5).b;
+    // beach: tan quartz/feldspar sand, darker where wet, fine grain speckle
+    vec3 beach = mix(vec3(0.30, 0.26, 0.19), vec3(0.50, 0.43, 0.31), smoothstep(0.2, 1.6, h));
+    beach *= 0.9 + 0.2 * mid - 0.12 * smoothstep(0.7, 0.95, spk2) * (1.0 - smoothstep(0.1, 0.5, fwc));
+    // granite / sandstone headland: dark when wet, bands at the waterline
+    vec3 granite = mix(vec3(0.20, 0.19, 0.18), vec3(0.34, 0.31, 0.28), fine) * (0.8 + 0.3 * big);
+    granite = mix(granite * 0.45, granite, smoothstep(1.0, 3.5, h)); // wet from spray up to ~2 m
+    float algae = smoothstep(-1.6, -0.9, h) * (1.0 - smoothstep(0.1, 0.5, h));
+    granite = mix(granite, vec3(0.16, 0.17, 0.09) * (0.8 + 0.4 * mid), algae * 0.85);
+    float barn = smoothstep(0.2, 0.45, h) * (1.0 - smoothstep(0.7, 1.0, h));
+    granite = mix(granite, vec3(0.40, 0.38, 0.34) * (0.5 + 0.8 * spk2), barn * 0.45);
+    // orange lichen on dry rock
+    granite = mix(granite, vec3(0.62, 0.42, 0.20), smoothstep(0.72, 0.9, mid) * smoothstep(3.0, 6.0, h) * 0.6);
+    // bluffs: Monterey cypress / coastal scrub greens with dry-grass patches
+    float grass = smoothstep(0.4, 0.62, big + (mid - 0.5) * 0.6);
+    vec3 scrub = mix(vec3(0.13, 0.19, 0.10), vec3(0.50, 0.44, 0.27), grass) * (0.85 + 0.3 * fine);
+    float cliff = smoothstep(0.45, 0.8, vTerrain.x);
+    vec3 land = mix(beach, scrub, smoothstep(2.0, 5.0, h + (mid - 0.5) * 2.5));
+    land = mix(land, mix(granite, granite * 0.8 + 0.06, smoothstep(6.0, 14.0, h)), max(shore, cliff * smoothstep(2.0, 6.0, h)));
+    // swash / foam line on the beach (weaker against rock): moves with the surge
+    float swash = 0.35 * sin(uTime * 0.7 + P.x * 0.021 + P.y * 0.017) + 0.15 * sin(uTime * 1.9 + P.y * 0.05);
+    // (only on a sloping shore: on dead-flat tidal ground the band would smear
+    // into big white sheets)
+    float shoreSlope = smoothstep(0.02, 0.08, length(vec2(dFdx(h), dFdy(h))) / max(1e-3, fwc));
+    float band = 1.0 - smoothstep(0.0, 0.25, abs(h - 0.1 - swash));
+    float lace = smoothstep(0.45, 0.8, texture2D(uDetail, P / 6.0 + vec2(uTime * 0.02, 0.0)).g + band * 0.3);
+    land = mix(land, vec3(0.85, 0.87, 0.84), band * lace * mix(0.7, 0.35, shore) * shoreSlope);
+    col = mix(col, land, smoothstep(-2.0, 0.3, h));
+  }
   diffuseColor.rgb *= col;
 }`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.96, 0.82, tRockMask);')
@@ -281,7 +322,7 @@ vec3 tPerturb(vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDir) {
   normal = tPerturb(-vViewPosition, normal, dB, faceDirection);
 }`);
   };
-  mat.customProgramCacheKey = () => 'krill-terrain-v2';
+  mat.customProgramCacheKey = () => 'krill-terrain-v3';
   return mat;
 }
 
@@ -322,6 +363,7 @@ export class Terrain {
       tileRadius: 4500, // m, stream 30 m tiles within this of the camera
       buildBudgetMs: 5,
       patchMaterial: null, // (material) => void, e.g. world.patchMaterial
+      lightLevel: null, // () => 0..1 daylight, drives light transmitted through kelp
     }, options);
 
     this.origin = new THREE.Vector2(0, 0); // absolute bay metres of scene (0, 0)
@@ -337,7 +379,7 @@ export class Terrain {
     // -------------------------------------------------------------------------------
 
     // boulders / reef rock and kelp forests, streamed with the terrain
-    this.flora = new Flora(this, { patchMaterial: this.options.patchMaterial });
+    this.flora = new Flora(this, { patchMaterial: this.options.patchMaterial, lightLevel: this.options.lightLevel });
 
     const { index, ring } = makeChunkIndex();
     this._index = index;
@@ -534,7 +576,7 @@ export class Terrain {
   _detail(X, Z, m, spacing) {
     const slope = Math.hypot(m.dx, m.dz);
     // rock on steep walls, and on reef patches (known rocky coasts + rare shelf outcrops)
-    const rock = Math.max(smoothstep(0.2, 0.55, slope), 0.85 * this.reefAt(X, Z, -m.h, spacing));
+    const rock = Math.max(smoothstep(0.2, 0.55, slope), 0.85 * this.reefAt(X, Z, -m.h, spacing), 0.9 * this.shoreRockAt(X, Z, m.h));
     const lim = spacing * 2;
     const oct = (lambda) => (spacing <= 0 ? 1 : smoothstep(lim, lim * 2, lambda));
     let d = 0;
@@ -580,6 +622,15 @@ export class Terrain {
       r = Math.max(r, 0.8 * smoothstep(0.75, 0.95, n) * (1 - smoothstep(110, 160, depth)));
     }
     return r;
+  }
+
+  // Rocky-shore weight 0..1 near and above the waterline (headlands inside
+  // the reef zones, broken up into outcrops with sandy pocket coves).
+  shoreRockAt(X, Z, h) {
+    if (h < -4 || h > 40) return 0;
+    const zw = this._zoneWeight(X, Z, false);
+    if (zw <= 0) return 0;
+    return zw * smoothstep(-0.45, 0.1, gnoise(X / 70, Z / 70, 53)) * (1 - smoothstep(25, 40, h));
   }
 
   // Silt (vs clean sand) 0..1: large patches, more of it in deeper, quieter water.
@@ -718,6 +769,7 @@ export class Terrain {
     this.stats.pending = missing.length;
     this.stats.tiles = [...this._tiles.values()].filter((g) => g instanceof Grid).length;
     this.stats.triangles = this._chunks.size * this._index.count / 3;
+    this.material.userData.terrainUniforms.uTime.value = performance.now() / 1000;
     if (this.loaded) {
       this.flora.update(CX, CZ, CY);
       this.stats.flora = this.flora.stats;
@@ -740,7 +792,9 @@ export class Terrain {
     // vertical distance to the (coarse) terrain height there
     const hy = this.region.sample(Math.min(Math.max(CX, x), x + size), Math.min(Math.max(CZ, z), z + size), this._s2).h;
     const dist = Math.hypot(dh, Math.max(0, Math.abs(CY - hy) - size * 0.25));
-    if (size > this.options.minChunkSize && dist < size * this.options.splitFactor) {
+    // from the air the view reaches the whole coast: split less eagerly
+    const split = CY > 0 ? this.options.splitFactor * 0.7 : this.options.splitFactor;
+    if (size > this.options.minChunkSize && dist < size * split) {
       const h = size / 2;
       this._select(x, z, h, CX, CY, CZ, view, out);
       this._select(x + h, z, h, CX, CY, CZ, view, out);
@@ -775,7 +829,7 @@ export class Terrain {
     const pos = new Float32Array(nv * 3);
     const nor = new Float32Array(nv * 3);
     const ter = new Float32Array(nv * 4);
-    const sed = new Float32Array(nv * 2);
+    const sed = new Float32Array(nv * 3);
     const baseX = Math.floor(X0 / WRAP) * WRAP, baseZ = Math.floor(Z0 / WRAP) * WRAP;
     let minY = Infinity, maxY = -Infinity;
     for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) {
@@ -794,8 +848,9 @@ export class Terrain {
       const VX = X0 + i * sp, VZ = Z0 + j * sp;
       const reef = this.reefAt(VX, VZ, -h, sp);
       ter[v * 4] = Math.max(reef, rockBase + 0.25 * gnoise(VX / 380, VZ / 380, 21) * Math.min(1, rockBase * 3));
-      sed[v * 2] = this.siltAt(VX, VZ, -h, sp);
-      sed[v * 2 + 1] = reef;
+      sed[v * 3] = this.siltAt(VX, VZ, -h, sp);
+      sed[v * 3 + 1] = reef;
+      sed[v * 3 + 2] = this.shoreRockAt(VX, VZ, h);
       ter[v * 4 + 1] = -h;
       ter[v * 4 + 2] = X0 + i * sp - baseX;
       ter[v * 4 + 3] = Z0 + j * sp - baseZ;
@@ -807,10 +862,14 @@ export class Terrain {
     const base = (N + 1) * (N + 1);
     for (let k = 0; k < this._ring.length; k++) {
       const s = this._ring[k], v = base + k;
-      pos[v * 3] = pos[s * 3]; pos[v * 3 + 1] = pos[s * 3 + 1] - skirt; pos[v * 3 + 2] = pos[s * 3 + 2];
+      // near and above the waterline a hanging skirt shows as a curtain through
+      // the (transparent) surface: keep those short. Below, full length.
+      const ey = pos[s * 3 + 1];
+      const len = ey > -4 ? Math.min(skirt, 0.6) : ey > -12 ? Math.min(skirt, 1 + (-4 - ey) * 0.6) : skirt;
+      pos[v * 3] = pos[s * 3]; pos[v * 3 + 1] = ey - len; pos[v * 3 + 2] = pos[s * 3 + 2];
       nor[v * 3] = nor[s * 3]; nor[v * 3 + 1] = nor[s * 3 + 1]; nor[v * 3 + 2] = nor[s * 3 + 2];
       for (let q = 0; q < 4; q++) ter[v * 4 + q] = ter[s * 4 + q];
-      sed[v * 2] = sed[s * 2]; sed[v * 2 + 1] = sed[s * 2 + 1];
+      for (let q = 0; q < 3; q++) sed[v * 3 + q] = sed[s * 3 + q];
     }
     minY -= skirt;
 
@@ -819,7 +878,7 @@ export class Terrain {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     geo.setAttribute('aTerrain', new THREE.BufferAttribute(ter, 4));
-    geo.setAttribute('aSed', new THREE.BufferAttribute(sed, 2));
+    geo.setAttribute('aSed', new THREE.BufferAttribute(sed, 3));
     geo.boundingBox = new THREE.Box3(new THREE.Vector3(0, minY, 0), new THREE.Vector3(size, maxY, size));
     geo.boundingSphere = geo.boundingBox.getBoundingSphere(new THREE.Sphere());
 

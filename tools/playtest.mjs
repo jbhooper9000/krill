@@ -496,6 +496,65 @@ const scenarios = {
     console.log(JSON.stringify(await info('top-down')));
     await shot('terrain-6-topdown');
   },
+  // Coast + kelp pass (PLAYTEST_2 N5/N6). Absolute lat/lon views: the camera
+  // and target are re-projected through terrain.origin every frame, so the
+  // floating origin can rebase freely. Run with PT_GPU=1.
+  async coast() {
+    await hideHud();
+    await evaljs(`(() => { krill.clock.hours = 13; krill.world.setTimeOfDay && krill.world.setTimeOfDay(13); krill.clock.update = () => {}; return 1; })()`);
+    const view = async (name, cam, tgt, whale, wait = 6000) => {
+      await evaljs(`(() => { const t = krill.terrain, c = krill.controller;
+        const P = (ll) => { const [X, Z] = t.project(ll[0], ll[1]); return [X, ll[2], Z]; };
+        const C = P(${JSON.stringify(cam)}), T = P(${JSON.stringify(tgt)}), W = P(${JSON.stringify(whale)});
+        c.position.set(W[0] - t.origin.x, W[1], W[2] - t.origin.y); c.velocity.set(0, 0, 0); c.speed = 0;
+        const dx = T[0] - W[0], dz = T[2] - W[2]; c.yaw = c.aimYaw = c._aimYawTarget = Math.atan2(-dx, -dz); c.pitch = 0;
+        c._updateCamera = function () { this.camera.position.set(C[0] - t.origin.x, C[1], C[2] - t.origin.y);
+          this.camera.lookAt(T[0] - t.origin.x, T[1], T[2] - t.origin.y); };
+        krill.phys.o2 = 1; krill.effects.resetExposure && krill.effects.resetExposure(); return 1; })()`);
+      await sleep(wait);
+      const st = await evaljs(`(() => { const i = krill.renderer.info; return JSON.stringify({ terrain: krill.terrain.stats.triangles,
+        flora: krill.terrain.stats.flora, chunks: krill.terrain.stats.chunks }); })()`);
+      console.log(name, st);
+      await shot(`coast-${name}`);
+    };
+    // Walk from `from` toward `to` until the floor rises above stopH; put the
+    // camera there at camY, looking `ahead` metres further on at height tgtY.
+    const shoreView = async (name, from, to, stopH, camY, ahead, tgtY) => {
+      const p = await evaljs(`(() => { const t = krill.terrain; const [ax, az] = t.project(${from[0]}, ${from[1]}); const [bx, bz] = t.project(${to[0]}, ${to[1]});
+        const L = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / L, uz = (bz - az) / L; let d = 0;
+        while (d < L && t.heightAtAbs(ax + ux * d, az + uz * d) < ${stopH}) d += 2;
+        const c = t.unproject(ax + ux * d, az + uz * d), g = t.unproject(ax + ux * (d + ${ahead}), az + uz * (d + ${ahead}));
+        return [c.lat, c.lon, g.lat, g.lon, d]; })()`);
+      console.log(name, 'camera at', p[4], 'm along the line');
+      await view(name, [p[0], p[1], camY], [p[2], p[3], tgtY], [p[0], p[1], camY > 0 ? -8 : camY - 3]);
+    };
+    // kelp forest off Lovers Point / Point Pinos (~16 m of water)
+    await view('kelp-inside', [36.64190, -121.93830, -9], [36.64230, -121.93760, -9], [36.64215, -121.93790, -9], 9000);
+    const frameInfo = () => evaljs(`new Promise(r => { const i = krill.renderer.info; i.autoReset = false;
+      requestAnimationFrame(() => { i.reset(); requestAnimationFrame(() => { const o = { tris: i.render.triangles, calls: i.render.calls };
+      i.autoReset = true; r(o); }); }); })`);
+    const ms = (f) => +(1000 / f).toFixed(1);
+    const f1 = await fps(); const i1 = await frameInfo();
+    await evaljs(`krill.terrain.flora.setVisible(false); 1`); const f2 = await fps(); const i2 = await frameInfo();
+    await evaljs(`krill.terrain.setVisible(false); 1`); const f3 = await fps(); const i3 = await frameInfo();
+    await evaljs(`krill.terrain.setVisible(true); krill.terrain.flora.setVisible(true); 1`);
+    console.log('perf kelp-inside', JSON.stringify({ all: { ms: ms(f1), ...i1 }, noFlora: { ms: ms(f2), ...i2 }, noTerrain: { ms: ms(f3), ...i3 } }));
+    await view('kelp-below', [36.64205, -121.93802, -14], [36.64240, -121.93770, 0], [36.64225, -121.93780, -11]);
+    await view('kelp-above', [36.64120, -121.93900, 7], [36.64230, -121.93760, -1], [36.64205, -121.93802, -4]);
+    await view('kelp-lobos-inside', [36.52470, -121.94930, -8], [36.52510, -121.94860, -8], [36.52486, -121.94899, -8]);
+    // Point Pinos rocky shore
+    await shoreView('pinos-above', [36.6450, -121.9450], [36.6335, -121.9335], -6, 4, 220, 2);
+    await shoreView('pinos-under', [36.6450, -121.9450], [36.6335, -121.9335], -7, -4, 22, -2);
+    // Santa Cruz Main Beach
+    await shoreView('beach-above', [36.9520, -122.0195], [36.9650, -122.0190], -3, 4, 120, 1);
+    await shoreView('beach-under', [36.9520, -122.0195], [36.9650, -122.0190], -6, -3, 20, -1.5);
+    // reef at ~25 m off Point Pinos
+    await view('reef-25m', [36.64400, -121.93230, -21], [36.64430, -121.93185, -26], [36.64421, -121.93196, -22]);
+    const frame = await evaljs(`new Promise(r => { const i = krill.renderer.info; i.autoReset = false;
+      requestAnimationFrame(() => { i.reset(); requestAnimationFrame(() => { const o = { tris: i.render.triangles, calls: i.render.calls };
+      i.autoReset = true; r(o); }); }); })`);
+    console.log('frame (reef view)', JSON.stringify(frame));
+  },
   // Scripted steps for debugging: PT_STEPS='[["js expr", "shotName"], ...]'
   // (shotName may be null; each step waits 900 ms before the shot).
   async steps() {
