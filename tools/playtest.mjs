@@ -11,7 +11,8 @@
 //            menu (species select over the live ocean, no autostart; also a
 //            narrow-window shot), hud (HUD states over bright + dark water,
 //            breach ready, denial, O2 veil), pause (pause screen),
-//            tune (tuning panel)
+//            tune (tuning panel), onboard (first-time hints + prey cue),
+//            daycard (end-of-day card)
 // Headless Chrome renders with SwiftShader (software), so expect ~5-10 fps —
 // game time (dt clamped to 0.05) runs slower than wall time.
 import { spawn } from 'node:child_process';
@@ -167,6 +168,59 @@ const scenarios = {
     await shot('hud-8-narrow');
     await viewport(1280, 720);
   },
+  // First-time onboarding: swim hint, first dive (krill layer), low air,
+  // nearest-patch hint, prey cue at the screen edge.
+  async onboard() {
+    await sleep(1500);
+    await shot('onboard-0-swim');
+    await key('keyDown', 'KeyW', 'w');
+    await sleep(4000);
+    await evaljs(`(() => { const c = krill.controller; c.position.y = -16; c._aimPitchTarget = -0.4; return 1; })()`);
+    await sleep(3000);
+    console.log('food', JSON.stringify(await hudState()));
+    await shot('onboard-1-food');
+    await evaljs(`krill.phys.o2 = 0.5; 1`);
+    await sleep(2500);
+    console.log('air', JSON.stringify(await hudState()));
+    await shot('onboard-2-air');
+    await evaljs(`krill.phys.o2 = 1; 1`);
+    await key('keyUp', 'KeyW', 'w');
+    // prey cue: hungry, nearest patch out of view
+    await evaljs(`(() => { const c = krill.controller; c._aimYawTarget += Math.PI; return 1; })()`);
+    await sleep(3000);
+    console.log('cue', await evaljs(`(() => { const e = document.getElementById('prey-cue'); return e.className + ' ' + e.style.transform; })()`));
+    await shot('onboard-3-cue');
+    // within 80 m of a patch
+    await evaljs(`(() => { const c = krill.controller; const h = krill.krill.krillClouds[0].homeCenter;
+      c.position.set(h.x + 40, h.y + 10, h.z + 50); c.velocity.set(0, 0, 0); c.speed = 0; return 1; })()`);
+    await sleep(3500);
+    console.log('patch', JSON.stringify(await hudState()));
+    await shot('onboard-4-patch');
+    // O2 below 25 %: amber arc; then out of air: blackout prompt above the veil
+    await evaljs(`(() => { krill.controller.position.y = -30; krill.phys.o2 = 0.2; return 1; })()`);
+    await sleep(2500);
+    await shot('onboard-5-o2-amber');
+    await evaljs(`krill.phys.o2 = 0.001; 1`);
+    await sleep(2500);
+    console.log('blackout', JSON.stringify(await hudState()));
+    await shot('onboard-6-blackout');
+  },
+  // End-of-day card: jump the day clock to midnight and let the game end the day.
+  async daycard() {
+    await sleep(1000);
+    await evaljs(`(() => { krill.phys.stats = { kg: 1240, dives: 14, lunges: 23, breaches: 3, blackouts: 0, bestLunge: 61 };
+      krill._dayTime = 24 * 3600 / 36; return 1; })()`);
+    await sleep(3500);
+    console.log('card', await evaljs(`document.getElementById('pause-title').textContent + ' | ' + document.getElementById('day-outcome').textContent`));
+    await shot('daycard');
+    await viewport(480, 820);
+    await sleep(1200);
+    await shot('daycard-narrow');
+    await viewport(1280, 720);
+    await keyTap('Enter', 'Enter');
+    await sleep(1500);
+    console.log('next day', await evaljs('krill.day'), 'paused', await evaljs('krill.paused'));
+  },
   async tune() {
     await sleep(800);
     await keyTap('KeyT', 't');
@@ -179,10 +233,14 @@ const scenarios = {
     await sleep(1500);
     await key('keyUp', 'KeyW', 'w');
     await evaljs(`krill.ui.setCondition(58, 75); krill.ui.setClock(14, 32); 1`);
-    await keyTap('Escape', 'Escape');
-    await sleep(1200);
-    console.log('paused', await evaljs('krill.paused'));
+    await keyTap('Escape', 'Escape', 900);
+    await sleep(2500);
+    console.log('paused', await evaljs('krill.paused'), await evaljs(`document.getElementById('pause-stats').textContent`));
     await shot('pause');
+    await evaljs(`document.querySelector('[data-map-level=region]').click(); 1`);
+    await sleep(2500);
+    await shot('pause-region');
+    await evaljs(`document.querySelector('[data-map-level=bay]').click(); 1`);
     await viewport(480, 820);
     await sleep(800);
     await shot('pause-narrow');
